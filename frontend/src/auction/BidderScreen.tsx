@@ -33,6 +33,7 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
   const [amounts, setAmounts] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [confirmingDrop, setConfirmingDrop] = useState(false)
 
   // On each new round / view, pre-fill the winner's own row with their standing bid
   // and lock selection to it; a non-winner starts with no selection.
@@ -44,6 +45,7 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
       setSelected(null)
     }
     setError(null)
+    setConfirmingDrop(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.round, view.status, winning])
 
@@ -92,7 +94,8 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
   const th: React.CSSProperties = { textAlign: 'left', padding: spacing.cellPadHead, borderBottom: `2px solid ${colors.border}`, fontSize: typography.sizeTable, color: colors.textSecondary }
   const td: React.CSSProperties = { padding: spacing.cellPadData, borderBottom: `1px solid ${colors.borderFaint}`, fontSize: typography.sizeTable }
   const input: React.CSSProperties = { width: 90, padding: '0.3rem 0.4rem', border: `1px solid ${colors.borderLight}`, borderRadius: 4, fontSize: typography.sizeTable }
-  const btn = (bg: string, on: boolean): React.CSSProperties => ({ padding: '0.55rem 1.1rem', borderRadius: 6, border: 'none', background: on ? bg : colors.borderLight, color: colors.white, fontSize: typography.sizeTable, cursor: on ? 'pointer' : 'not-allowed' })
+  // Equal-sized buttons: fixed width + height so Submit and Drop Out match side by side.
+  const btn = (bg: string, on: boolean): React.CSSProperties => ({ width: 150, height: 44, padding: '0 1rem', textAlign: 'center', borderRadius: 6, border: 'none', background: on ? bg : colors.borderLight, color: colors.white, fontSize: typography.sizeTable, cursor: on ? 'pointer' : 'not-allowed' })
 
   const statusText = view.isWinner ? `You are winning License ${winning}` : 'You are not winning any licenses'
 
@@ -106,6 +109,7 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
           <p style={{ margin: '0.4rem 0', color: colors.textSecondary }}>
             You are <strong data-testid="saa-bidder">Bidder {view.bidderIndex}</strong>
             {!ended && <> · <span data-testid="saa-round">Round {view.round}</span></>}
+            {' · '}Active bidders: <strong data-testid="saa-active">{view.activeCount}</strong>
           </p>
           <p style={{ margin: '0.4rem 0' }} data-testid="saa-winning">{ended ? 'The auction has ended.' : statusText}</p>
           <p style={{ margin: '0.4rem 0', color: colors.textSecondary }}>
@@ -193,10 +197,24 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
           <section data-testid="saa-waiting" style={{ color: colors.textSecondary }}>
             You have acted this round. Waiting for the other bidders — {view.actedCount} of {view.activeCount} have acted. The round closes when everyone has acted.
           </section>
+        ) : confirmingDrop ? (
+          <section data-testid="saa-dropout-confirm" style={{ background: colors.errorBg, border: `1px solid ${colors.errorBorder}`, padding: layout.pagePad, borderRadius: 8 }}>
+            <p style={{ marginTop: 0, color: colors.errorText }}>
+              Are you sure? Dropping out is permanent — you cannot rejoin the auction.
+            </p>
+            <div style={{ display: 'flex', gap: spacing.gapBtn }}>
+              <button data-testid="saa-dropout-confirm-yes" style={btn(colors.errorAction, !submitting)} disabled={submitting} onClick={() => { setConfirmingDrop(false); void run(onDropOut) }}>
+                Confirm
+              </button>
+              <button data-testid="saa-dropout-confirm-no" style={btn(colors.roleNone, true)} onClick={() => setConfirmingDrop(false)}>
+                Cancel
+              </button>
+            </div>
+          </section>
         ) : (
           <section style={{ display: 'flex', alignItems: 'center', gap: spacing.gapBtn }}>
             <button data-testid="saa-submit" style={btn(colors.roleA, canAct && selected !== null && !submitting)} disabled={!canAct || selected === null || submitting} onClick={onSubmit}>
-              {winning ? 'Submit (hold or raise)' : 'Submit bid'}
+              Submit
             </button>
             {view.isWinner ? (
               <span data-testid="saa-dropout-blocked" style={{ color: colors.textMuted, fontSize: typography.sizeSm }}>
@@ -204,8 +222,8 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
                 {' '}You cannot drop out — your winning bid is binding.
               </span>
             ) : (
-              <button data-testid="saa-dropout" style={btn(colors.errorAction, canAct && !submitting)} disabled={!canAct || submitting} onClick={() => void run(onDropOut)}>
-                I'm Done (Drop Out)
+              <button data-testid="saa-dropout" style={btn(colors.errorAction, canAct && !submitting)} disabled={!canAct || submitting} onClick={() => setConfirmingDrop(true)}>
+                Drop Out
               </button>
             )}
           </section>

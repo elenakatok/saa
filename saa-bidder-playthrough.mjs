@@ -69,6 +69,9 @@ async function main() {
     check(await txt(page, 'saa-inc-A') === '100', '(1) per-license min increment A = 100 (band 200–299)')
     check(await txt(page, 'saa-winner-A') === '—', '(1) round-1 no current winner on A')
     check(await page.locator('[data-testid^="saa-row-"]').count() === 5, '(1) all five license rows present')
+    check(await txt(page, 'saa-active') === '7', '(rev-2) active-bidder count shows 7 (server-sourced)')
+    check((await txt(page, 'saa-submit'))?.trim() === 'Submit', '(rev-1) submit button label is just "Submit"')
+    check((await txt(page, 'saa-dropout'))?.trim() === 'Drop Out', '(rev-1) drop-out button label is just "Drop Out"')
 
     // (4) one-bid enforcement: selecting A disables the other rows' inputs
     await page.fill('[data-testid="saa-bid-input-A"]', '300')
@@ -94,10 +97,18 @@ async function main() {
     check(await txt(page, 'saa-winner-A') === 'Bidder 6', '(2) A now won by Bidder 6 (revealed); p1 lost it')
     check((await txt(page, 'saa-winning'))?.includes('not winning'), '(2) status: p1 is now winning nothing')
 
-    // (6) non-winner drops out → watch mode (no buttons), still sees the table
+    // (rev-3) drop-out is guarded by a permanence confirmation; Cancel keeps you in
     await page.click('[data-testid="saa-dropout"]')
+    await page.waitForSelector('[data-testid="saa-dropout-confirm"]', { timeout: 8000 })
+    check(await seen(page, 'saa-dropout-confirm'), '(rev-3) Drop Out shows a permanence confirmation dialog')
+    await page.click('[data-testid="saa-dropout-confirm-no"]')
+    check(!(await seen(page, 'saa-dropout-confirm')) && await seen(page, 'saa-submit'), '(rev-3) Cancel returns to the bidder controls (still in)')
+    // (6) Confirm actually drops → watch mode (no buttons), still sees the table
+    await page.click('[data-testid="saa-dropout"]')
+    await page.waitForSelector('[data-testid="saa-dropout-confirm"]', { timeout: 8000 })
+    await page.click('[data-testid="saa-dropout-confirm-yes"]')
     await page.waitForSelector('[data-testid="saa-watch"]', { timeout: 8000 })
-    check(await seen(page, 'saa-watch'), '(6) drop-out → watch mode')
+    check(await seen(page, 'saa-watch'), '(6) Confirm → drop-out → watch mode')
     check(!(await seen(page, 'saa-submit')) && !(await seen(page, 'saa-dropout')), '(6) watch mode has NO action buttons')
     check(await seen(page, 'saa-license-table'), '(6) watcher still sees the license table')
     await page.close()
