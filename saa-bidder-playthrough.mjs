@@ -164,30 +164,26 @@ async function main() {
     await page.close()
   }
 
-  // ── (D) instructor: clean dashboard + separate Live Dashboard + open-auction + force-out
-  section('(D) instructor — clean dashboard, /live view, open-auction trigger, privacy, force-out')
+  // ── (D) instructor: eBay-style start box on the dashboard + /live watch + force-out
+  section('(D) instructor — dashboard start box, /live watch, privacy, force-out')
   {
-    const gid = 'ui-dash'; await seedGroup(gid) // matched, NOT opened via callable
+    const gid = 'ui-dash'; await seedGroup(gid) // matched, NOT opened
     const iview = async () => (await callFn('getInstructorAuctionView', asDev(gid, {}))).result
 
-    // (rev2) main dashboard is clean: the Live nav link is there, the auction panel is NOT stacked on top
+    // (rev2) MAIN dashboard: eBay-style start box above the roster, per-group Start Auction
     const dash = await ctx.newPage()
     await dash.goto(`${FE}/dashboard?_dev_game_instance_id=${gid}&_session=tab`)
-    await dash.waitForSelector('[data-testid="saa-live-nav"]', { timeout: 25000 })
-    check(await seen(dash, 'saa-live-nav'), '(D-rev2) main dashboard shows a "Live auctions" nav link')
-    check(!(await seen(dash, 'saa-dash-group-g')), '(D-rev2) main dashboard does NOT stack the auction panel')
+    await dash.waitForSelector('[data-testid="saa-auction-controls"]', { timeout: 25000 })
+    check(await seen(dash, 'saa-live-nav'), '(D-rev2) main dashboard shows the "Live auctions" nav link')
+    await dash.waitForSelector('[data-testid="saa-start-auction-g"]', { timeout: 12000 })
+    check(await seen(dash, 'saa-start-auction-g'), '(D-rev2) start box shows a per-group Start Auction button')
+    check(!(await seen(dash, 'saa-dash-group-g')), '(D-rev2) the full auction panel is NOT on the main dashboard')
+    // start the auction FROM THE DASHBOARD box
+    await dash.click('[data-testid="saa-start-auction-g"]')
+    await dash.waitForSelector('[data-testid="saa-start-status-g"]', { timeout: 12000 })
+    check(/open/i.test((await txt(dash, 'saa-start-status-g')) ?? ''), '(D-rev2) group shows "Auction open" after Start')
+    check(!(await seen(dash, 'saa-start-auction-g')), '(D-rev2) started group no longer shows a Start button (no duplicate)')
     await dash.close()
-
-    // (rev3) Live Dashboard: a matched group shows the eBay-style Open Auction trigger
-    const live = await ctx.newPage()
-    await live.goto(`${FE}/live?_dev_game_instance_id=${gid}&_session=tab`)
-    await live.waitForSelector('[data-testid="saa-live-dashboard"]', { timeout: 25000 })
-    await live.waitForSelector('[data-testid="saa-open-auction-g"]', { timeout: 12000 })
-    check(await seen(live, 'saa-open-auction-g'), '(D-rev3) matched group shows an "Open Auction" trigger')
-    await live.click('[data-testid="saa-open-auction-g"]')
-    await live.waitForSelector('[data-testid="saa-dash-group-g"]', { timeout: 12000 }) // auction card appears
-    check(await txt(live, 'saa-dash-round') === 'Round 1', '(D-rev3) open-auction trigger started the auction (Round 1)')
-    check(await txt(live, 'saa-dash-active') === '7', '(D) Live Dashboard shows active-bidder count 7')
 
     // p1 (Ada) submits a DISTINCTIVE 777; round stays open.
     await bidAs(gid, 'p1', 'A', 777)
@@ -195,6 +191,14 @@ async function main() {
     check(!JSON.stringify(v).includes('777'), '(D-privacy) pending amount (777) is NOT in the instructor view')
     const b1 = v.groups[0].bidders.find((x) => x.bidderIndex === 1)
     check(b1.hasActed === true && b1.amount === undefined && b1.licenseId === undefined, '(D-privacy) hasActed bool, no amount/license')
+
+    // /live WATCH view — watch-only, NO start button
+    const live = await ctx.newPage()
+    await live.goto(`${FE}/live?_dev_game_instance_id=${gid}&_session=tab`)
+    await live.waitForSelector('[data-testid="saa-dash-group-g"]', { timeout: 25000 })
+    check(!(await seen(live, 'saa-start-auction-g')), '(D-rev2) /live is watch-only — no Start Auction button')
+    check(await txt(live, 'saa-dash-round') === 'Round 1', '(D) /live shows Round 1')
+    check(await txt(live, 'saa-dash-active') === '7', '(D) /live active-bidder count 7')
     await live.waitForTimeout(2500)
     const body = await live.evaluate(() => document.querySelector('[data-testid="saa-live-dashboard"]').innerText)
     check(body.includes('Ada Lovelace') && body.includes('Grace Kim'), '(D) real student names shown')

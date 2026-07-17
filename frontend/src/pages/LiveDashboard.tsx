@@ -3,8 +3,8 @@ import { signInWithCustomToken, setPersistence, browserSessionPersistence } from
 import { GameHeader, colors, typography, layout, spacing } from '@mygames/game-ui'
 import { auth } from '../firebase'
 import {
-  getInstructorSession, getRoster, getInstructorAuctionView, forceOut, openAuction,
-  type InstructorGroupAuction, type RosterGroup,
+  getInstructorSession, getInstructorAuctionView, forceOut,
+  type InstructorGroupAuction,
 } from '../api'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -109,26 +109,21 @@ function AuctionCard({ n, a, onForceOut }: { n: number; a: InstructorGroupAuctio
 
 export default function LiveDashboard() {
   const { ready, error } = useInstructorAuth()
-  const [rosterGroups, setRosterGroups] = useState<RosterGroup[]>([])
   const [auctions, setAuctions] = useState<InstructorGroupAuction[]>([])
   const [confirming, setConfirming] = useState<Confirming>(null)
   const [busy, setBusy] = useState<Record<string, boolean>>({})
 
+  // Watch-only: /live shows STARTED auctions. Starting happens on the main dashboard.
   useEffect(() => {
     if (!ready) return
     let alive = true
     const tick = () =>
-      Promise.all([getRoster().catch(() => null), getInstructorAuctionView().catch(() => null)])
-        .then(([r, a]) => { if (!alive) return; if (r?.ok) setRosterGroups(r.groups); if (a?.ok) setAuctions(a.groups) })
+      getInstructorAuctionView().then((a) => { if (alive && a?.ok) setAuctions(a.groups) }).catch(() => { /* retry on interval */ })
     tick()
     const id = setInterval(tick, 2000)
     return () => { alive = false; clearInterval(id) }
   }, [ready])
 
-  const openOne = (gid: string) => {
-    setBusy((b) => ({ ...b, [gid]: true }))
-    openAuction(gid).catch(() => { /* poll reflects the truth */ }).finally(() => setBusy((b) => ({ ...b, [gid]: false })))
-  }
   const doForceOut = () => {
     if (!confirming) return
     setBusy((b) => ({ ...b, force: true }))
@@ -145,8 +140,7 @@ export default function LiveDashboard() {
   if (error) return shell(<p style={{ color: colors.errorText }}>{error}</p>)
   if (!ready) return shell(<p>Loading…</p>)
 
-  const auctionByGid = new Map(auctions.map((a) => [a.groupId, a]))
-  const sorted = [...rosterGroups].sort((a, b) => a.group_id.localeCompare(b.group_id))
+  const sorted = [...auctions].sort((a, b) => a.groupId.localeCompare(b.groupId))
 
   return shell(
     <section data-testid="saa-live-dashboard">
@@ -155,21 +149,11 @@ export default function LiveDashboard() {
         <a data-testid="saa-back-to-dashboard" href={`/dashboard${window.location.search}`} style={{ color: '#D38626', fontWeight: 600, fontSize: typography.sizeSm }}>← Back to dashboard</a>
       </div>
 
-      {sorted.length === 0 && <p style={{ color: colors.textSecondary }}>No matched groups yet. Match students on the main dashboard first.</p>}
+      {sorted.length === 0 && <p style={{ color: colors.textSecondary }}>No auctions started yet — start one from the dashboard.</p>}
 
-      {sorted.map((rg, i) => {
-        const a = auctionByGid.get(rg.group_id)
-        if (a) return <AuctionCard key={rg.group_id} n={i + 1} a={a} onForceOut={(bi, name) => setConfirming({ groupId: rg.group_id, bidderIndex: bi, name })} />
-        return (
-          <div key={rg.group_id} data-testid={`saa-live-group-${rg.group_id}`} style={{ display: 'flex', alignItems: 'center', gap: spacing.gapBtn, border: `1px solid ${colors.borderMid}`, borderRadius: 8, padding: '0.9rem 1.1rem', marginBottom: spacing.gapLg, background: colors.white }}>
-            <strong>Group {i + 1}</strong>
-            <span style={{ color: colors.textSecondary, fontSize: typography.sizeSm }}>matched — auction not started</span>
-            <button data-testid={`saa-open-auction-${rg.group_id}`} disabled={busy[rg.group_id]}
-              style={{ marginLeft: 'auto', padding: '0.5rem 1rem', borderRadius: 6, border: 'none', background: colors.roleA, color: colors.white, cursor: busy[rg.group_id] ? 'wait' : 'pointer' }}
-              onClick={() => openOne(rg.group_id)}>Open Auction</button>
-          </div>
-        )
-      })}
+      {sorted.map((a, i) => (
+        <AuctionCard key={a.groupId} n={i + 1} a={a} onForceOut={(bi, name) => setConfirming({ groupId: a.groupId, bidderIndex: bi, name })} />
+      ))}
 
       {confirming && (
         <div data-testid="saa-dash-forceout-confirm" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>

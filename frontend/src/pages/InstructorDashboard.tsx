@@ -3,7 +3,7 @@ import { InstructorDashboard as SharedDashboard, type DeadlockResolutionProps, t
 import { auth, functions, rtdb } from '../firebase'
 import { submitInstructorOutcome } from '../api'
 import { saaConfig } from '../gameConfig'
-import LiveNavLink from '../auction/LiveNavLink'
+import StartAuctionBox from '../auction/StartAuctionBox'
 
 // ── Role labels from game config (SINGLE role — `bidder`) ─────────────────────
 
@@ -68,8 +68,8 @@ function SaaDeadlockControl({ submitting, error, onSubmit }: DeadlockResolutionP
 export default function InstructorDashboard() {
   return (
     <>
-      {/* Clean roster dashboard + a nav link to the separate /live auction view. */}
-      <LiveNavLink />
+      {/* eBay-style start box above the roster (start here) + nav link to /live (watch). */}
+      <StartAuctionBox />
       <SharedDashboard
         title="Instructor Dashboard — SAA"
         roleLabels={roleLabels}
