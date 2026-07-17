@@ -186,6 +186,33 @@ async function main() {
     check(s.state.standing.B.winnerBidderIndex === 2 && s.state.standing.B.standingPrice === 200, 'idx2 still holds B@200 — carry-over preserved without re-bidding')
   }
 
+  // ── (8) getBidderView — paranoid per-caller view (Slice 4 data contract) ──────
+  section('(8) getBidderView — own values, revealed winners, per-caller min legal bid, privacy')
+  {
+    const gid = 's8-view'
+    await setup(gid); await playRound1(gid) // A→idx6@300; idx1 non-winner
+    const view = async (pid) => (await callFn('getBidderView', asStudent(gid, pid, { group_id: 'g' }))).result
+    const row = (v, l) => v.licenses.find((x) => x.licenseId === l)
+
+    const v1 = await view('p1') // non-winner
+    check(v1.bidderIndex === 1, 'view reports the caller bidderIndex (1)')
+    check(row(v1, 'A').yourValue === 600 && row(v1, 'D').yourValue === 356, "own value column only (A=600, D=356 = matrix col 1)")
+    check(row(v1, 'A').currentWinnerIndex === 6, 'current winner of A revealed publicly (idx6)')
+    check(v1.isWinner === false && v1.winningLicense === null && v1.provisionalProfit === 0, 'non-winner status: winning nothing, profit 0')
+    check(row(v1, 'A').minLegalBidForYou === 350, 'min legal to TAKE A (held@300, band 50) = 350')
+    check(row(v1, 'B').minLegalBidForYou === 300, 'min legal to TAKE B (held@200, band 100) = 300')
+    check(!('actions' in v1), 'raw actions map is NOT exposed to the student')
+    const leaked = JSON.stringify(v1.licenses).match(/otherValue|allValues/) // no cross-bidder value fields
+    check(leaked === null && v1.licenses.every((l) => typeof l.yourValue === 'number' && Object.keys(l).length <= 7), 'no other bidder values/pending bids leaked (own column + public standing only)')
+
+    const v6 = await view('p6') // winner of A
+    check(v6.isWinner === true && v6.winningLicense === 'A' && v6.currentBidOnWinningLicense === 300, 'winner status: winning A @300')
+    check(v6.provisionalProfit === 499 - 300, 'winner provisional profit = value(A,6)=499 − 300 = 199')
+    check(row(v6, 'A').yourValue === 499, "winner sees THEIR own A value (499), not idx1's 600")
+    check(row(v6, 'A').minLegalBidForYou === 301, 'winner self-raise minimum = current+1 = 301 (no increment on a self-raise)')
+    check(row(v6, 'B').minLegalBidForYou === null, 'winner cannot bid another license (B minLegal = null)')
+  }
+
   // ── report ────────────────────────────────────────────────────────────────────
   console.log(results.join('\n'))
   console.log(`\n${passed} passed, ${failed} failed`)

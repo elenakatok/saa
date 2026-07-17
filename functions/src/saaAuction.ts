@@ -26,7 +26,10 @@ import {
   type RoundLoopState,
   type RoundAction,
 } from './auction/roundLoop'
-import type { LicenseId } from './auction/valueMatrix'
+import { LICENSE_IDS, valueFor, type LicenseId } from './auction/valueMatrix'
+import { minIncrement } from './auction/increment'
+import { provisionalProfit } from './auction/resolution'
+import { winningLicenseOf, minToTake } from './auction/validateBid'
 
 const isEmu = () => process.env.FUNCTIONS_EMULATOR === 'true'
 const authHeaderOf = (req: CallableRequest): string | undefined =>
@@ -175,6 +178,71 @@ export const forceOut = onCall(CORS, async (request) => {
     })
     return { ok: true as const, roundClosed: result.roundClosed, status: result.state.status, round: result.state.round }
   })
+})
+
+// ── getBidderView (student): the PARANOID §12 per-caller view for the screen ─────
+// Returns ONLY: public standing (prices + revealed winners, both public per §12),
+// the CALLER's own private value column + status, and count-based waiting info.
+// It NEVER exposes another bidder's private values or their pending (un-closed) bid.
+export const getBidderView = onCall(CORS, async (request) => {
+  const data = request.data as Record<string, unknown>
+  const { participantId, gameInstanceId } = await extractStudentOnCallIds(data, isEmu(), authHeaderOf(request))
+  const groupId = String(data['group_id'] ?? '')
+  if (!groupId) throw new HttpsError('invalid-argument', 'group_id required')
+
+  const snap = await stateDoc(gameInstanceId, groupId).get()
+  if (!snap.exists) throw new HttpsError('not-found', 'Auction not started.')
+  const stored = snap.data() as StoredDoc
+  const state = stored.state
+  const bidderIndex = stored.index_by_pid[participantId]
+  if (bidderIndex === undefined) throw new HttpsError('permission-denied', 'You are not a bidder in this auction.')
+
+  const winningLicense = winningLicenseOf(bidderIndex, state.standing)
+  const active = state.activeBidders.includes(bidderIndex)
+  const isOpen = state.status === 'open'
+  const hasActedThisRound = state.actions[bidderIndex] !== undefined
+
+  const licenses = LICENSE_IDS.map((l) => {
+    const s = state.standing[l]
+    // The minimum LEGAL bid for THIS caller on THIS license (server-authoritative hint):
+    //   • non-winner → Case-A minToTake (200 if unheld, else standing+increment)
+    //   • the caller's own held license → self-raise, standing+1
+    //   • a winner on ANY other license → null (cannot switch)
+    let minLegalBidForYou: number | null = null
+    if (isOpen && active && !hasActedThisRound) {
+      if (winningLicense === null) minLegalBidForYou = minToTake(l, state.standing)
+      else if (l === winningLicense) minLegalBidForYou = s.standingPrice + 1
+    }
+    return {
+      licenseId: l,
+      yourValue: valueFor(l, bidderIndex), // caller's OWN column only — private
+      currentHighBid: s.standingPrice,
+      currentWinnerIndex: s.winnerBidderIndex,
+      youAreWinner: s.winnerBidderIndex === bidderIndex,
+      minIncrement: minIncrement(s.standingPrice), // per-license band (display)
+      minLegalBidForYou,
+    }
+  })
+
+  return {
+    ok: true as const,
+    status: state.status,
+    round: state.round,
+    bidderIndex,
+    active,
+    droppedOut: state.droppedBidders.includes(bidderIndex),
+    hasActedThisRound,
+    isWinner: winningLicense !== null,
+    winningLicense,
+    currentBidOnWinningLicense: winningLicense ? state.standing[winningLicense].standingPrice : null,
+    provisionalProfit: provisionalProfit(bidderIndex, state.standing),
+    licenses,
+    activeCount: state.activeBidders.length,
+    actedCount: Object.keys(state.actions).length, // COUNT only — never others' amounts
+    terminalAllocation: state.status === 'ended' ? state.terminalAllocation : null,
+    yourTerminalLicense: state.status === 'ended' ? winningLicense : null,
+    yourTerminalProfit: state.status === 'ended' ? provisionalProfit(bidderIndex, state.standing) : null,
+  }
 })
 
 // ── getAuctionState (instructor): full state view (Slice 5 dashboard/harness) ────

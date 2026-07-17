@@ -65,7 +65,7 @@ export { scoreAndRecord } from './scoreAndRecord'
 // Stateful shell over the pure Slice-1/2 core (validate → resolve, server-authoritative
 // round close). Bidder screen (Slice 4), instructor dashboard (Slice 5), and grading
 // (Slice 6) are not built yet.
-export { openAuction, submitBid, holdBid, dropOut, forceOut, getAuctionState } from './saaAuction'
+export { openAuction, submitBid, holdBid, dropOut, forceOut, getAuctionState, getBidderView } from './saaAuction'
 
 // ── Non-game onRequest endpoints ────────────────────────────────────────────────
 
