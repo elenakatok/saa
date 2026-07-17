@@ -61,10 +61,11 @@ export const getInfoUrls                        = makeGetInfoUrls(saaGameDef)
 export { getReportData } from './getReportData'
 export { scoreAndRecord } from './scoreAndRecord'
 
-// NOTE (Phase 2): the live per-license auction server (startAuction/submitBid/round loop,
-// activity rule, endogenous termination, endowment assignment) is NOT built here. It will
-// consume the already-extracted pure resolver @mygames/game-engine/auction (see
-// functions/src/roundResolution.ts) when Phase 2 lands.
+// ── Phase 2 Slice 3: the round-loop state machine (Firestore-backed callables) ──
+// Stateful shell over the pure Slice-1/2 core (validate → resolve, server-authoritative
+// round close). Bidder screen (Slice 4), instructor dashboard (Slice 5), and grading
+// (Slice 6) are not built yet.
+export { openAuction, submitBid, holdBid, dropOut, forceOut, getAuctionState } from './saaAuction'
 
 // ── Non-game onRequest endpoints ────────────────────────────────────────────────
 
