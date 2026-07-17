@@ -254,6 +254,10 @@ export const getInstructorAuctionView = () =>
 export const forceOut = (groupId: string, bidderIndex: number) =>
   callFn<{ ok: boolean; roundClosed?: boolean; status?: string }>('forceOut', { group_id: groupId, bidder_index: bidderIndex })
 
+// Per-group open — same shape as eBay's startAuction(group_id). Backend already live.
+export const openAuction = (groupId: string) =>
+  callFn<{ ok: boolean; round?: number; activeBidders?: number[] }>('openAuction', { group_id: groupId })
+
 // ── Config API (SettingsPage) ─────────────────────────────────────────────────
 
 export const getGameConfig = () =>

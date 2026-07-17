@@ -129,8 +129,7 @@ async function main() {
     // (5) winner's own row pre-filled with their standing bid (200)
     check(await page.inputValue('[data-testid="saa-bid-input-A"]') === '200', '(5) winner row A pre-filled with current standing bid (200)')
     // (5) drop-out blocked for a winner
-    check(await page.isDisabled('[data-testid="saa-dropout"]'), '(5) Drop Out is disabled for the winner (bids binding)')
-    check(await seen(page, 'saa-dropout-blocked'), '(5) winner sees the "cannot drop out" note')
+    check(await page.isDisabled('[data-testid="saa-dropout"]'), '(5) Drop Out is disabled for the winner (bids binding) — no note (rev)')
     // (5) raise: edit up to 250 → accepted → next round A = You @250
     await page.fill('[data-testid="saa-bid-input-A"]', '250'); await page.click('[data-testid="saa-submit"]')
     await page.waitForSelector('[data-testid="saa-waiting"]', { timeout: 8000 })
@@ -165,52 +164,60 @@ async function main() {
     await page.close()
   }
 
-  // ── (D) instructor dashboard — Slice 5 ────────────────────────────────────────
-  section('(D) instructor dashboard — state, names, sealed-bid privacy, force-out')
+  // ── (D) instructor: clean dashboard + separate Live Dashboard + open-auction + force-out
+  section('(D) instructor — clean dashboard, /live view, open-auction trigger, privacy, force-out')
   {
-    const gid = 'ui-dash'; await seedGroup(gid); await open(gid)
+    const gid = 'ui-dash'; await seedGroup(gid) // matched, NOT opened via callable
     const iview = async () => (await callFn('getInstructorAuctionView', asDev(gid, {}))).result
 
-    // p1 (Ada Lovelace) submits a DISTINCTIVE bid 777 on A; round stays open.
-    await bidAs(gid, 'p1', 'A', 777)
-    // PRIVACY (load-bearing): the instructor view must NOT expose the pending amount.
-    const v = await iview()
-    check(!JSON.stringify(v).includes('777'), '(D-privacy) pending bid amount (777) is NOT in the open-round instructor view')
-    const b1 = v.groups[0].bidders.find((x) => x.bidderIndex === 1)
-    check(b1.hasActed === true && b1.amount === undefined && b1.licenseId === undefined, '(D-privacy) view shows hasActed=true but no amount/license')
-
-    // open the dashboard as instructor
+    // (rev2) main dashboard is clean: the Live nav link is there, the auction panel is NOT stacked on top
     const dash = await ctx.newPage()
     await dash.goto(`${FE}/dashboard?_dev_game_instance_id=${gid}&_session=tab`)
-    await dash.waitForSelector('[data-testid="saa-dashboard"]', { timeout: 25000 })
-    check(await txt(dash, 'saa-dash-round') === 'Round 1', '(D) dashboard shows the round')
-    check(await txt(dash, 'saa-dash-status') === 'open', '(D) dashboard shows status open')
-    check(await txt(dash, 'saa-dash-active') === '7', '(D) dashboard shows active-bidder count 7')
-    const body1 = await dash.evaluate(() => document.querySelector('[data-testid="saa-dashboard"]').innerText)
-    check(body1.includes('Ada Lovelace') && body1.includes('Grace Kim'), '(D) real student names shown')
-    check(!body1.includes('777'), '(D-privacy) dashboard UI does not render the pending amount')
-    check(await txt(dash, 'saa-dash-acted-1') === 'acted this round', '(D) acted bidder shows "acted this round"')
-    check(await txt(dash, 'saa-dash-acted-7') === 'still deciding', '(D) non-acted bidder shows "still deciding"')
-    check(await seen(dash, 'saa-dash-forceout-7'), '(D) Force Out present for a non-winner')
+    await dash.waitForSelector('[data-testid="saa-live-nav"]', { timeout: 25000 })
+    check(await seen(dash, 'saa-live-nav'), '(D-rev2) main dashboard shows a "Live auctions" nav link')
+    check(!(await seen(dash, 'saa-dash-group-g')), '(D-rev2) main dashboard does NOT stack the auction panel')
+    await dash.close()
 
-    // finish round 1 except p7 (non-responsive) → round is stuck
+    // (rev3) Live Dashboard: a matched group shows the eBay-style Open Auction trigger
+    const live = await ctx.newPage()
+    await live.goto(`${FE}/live?_dev_game_instance_id=${gid}&_session=tab`)
+    await live.waitForSelector('[data-testid="saa-live-dashboard"]', { timeout: 25000 })
+    await live.waitForSelector('[data-testid="saa-open-auction-g"]', { timeout: 12000 })
+    check(await seen(live, 'saa-open-auction-g'), '(D-rev3) matched group shows an "Open Auction" trigger')
+    await live.click('[data-testid="saa-open-auction-g"]')
+    await live.waitForSelector('[data-testid="saa-dash-group-g"]', { timeout: 12000 }) // auction card appears
+    check(await txt(live, 'saa-dash-round') === 'Round 1', '(D-rev3) open-auction trigger started the auction (Round 1)')
+    check(await txt(live, 'saa-dash-active') === '7', '(D) Live Dashboard shows active-bidder count 7')
+
+    // p1 (Ada) submits a DISTINCTIVE 777; round stays open.
+    await bidAs(gid, 'p1', 'A', 777)
+    const v = await iview()
+    check(!JSON.stringify(v).includes('777'), '(D-privacy) pending amount (777) is NOT in the instructor view')
+    const b1 = v.groups[0].bidders.find((x) => x.bidderIndex === 1)
+    check(b1.hasActed === true && b1.amount === undefined && b1.licenseId === undefined, '(D-privacy) hasActed bool, no amount/license')
+    await live.waitForTimeout(2500)
+    const body = await live.evaluate(() => document.querySelector('[data-testid="saa-live-dashboard"]').innerText)
+    check(body.includes('Ada Lovelace') && body.includes('Grace Kim'), '(D) real student names shown')
+    check(!body.includes('777'), '(D-privacy) Live Dashboard UI does not render the pending amount')
+    check(await txt(live, 'saa-dash-acted-1') === 'acted this round', '(D) acted bidder shows "acted this round"')
+    check(await txt(live, 'saa-dash-acted-7') === 'still deciding', '(D) non-acted bidder shows "still deciding"')
+    check(await seen(live, 'saa-dash-forceout-7'), '(D) Force Out present for a non-winner')
+
+    // finish round 1 except p7 (non-responsive) → force out via the Live Dashboard
     await bidAs(gid, 'p2', 'B', 200); await bidAs(gid, 'p3', 'C', 200); await bidAs(gid, 'p4', 'D', 200)
     await bidAs(gid, 'p5', 'E', 200); await bidAs(gid, 'p6', 'A', 300)
-    await dash.waitForTimeout(2500) // let the dashboard poll
-
-    // force-out the stuck bidder via the dashboard, through the confirm dialog
-    await dash.click('[data-testid="saa-dash-forceout-7"]')
-    await dash.waitForSelector('[data-testid="saa-dash-forceout-confirm"]', { timeout: 8000 })
-    check((await txt(dash, 'saa-dash-forceout-confirm'))?.includes('Grace Kim'), '(D) force-out confirm names the bidder')
-    await dash.click('[data-testid="saa-dash-forceout-yes"]')
-    // force-out was the 7th action → round closes → active 7→6, round 2, p1 won A@777
-    await dash.waitForFunction(() => document.querySelector('[data-testid="saa-dash-active"]')?.textContent === '6', null, { timeout: 12000 })
-    check(await txt(dash, 'saa-dash-active') === '6', '(D) force-out unblocked the round → active count 7→6')
-    check(await txt(dash, 'saa-dash-round') === 'Round 2', '(D) round advanced after the stuck round closed')
-    check(await txt(dash, 'saa-dash-acted-7') === 'dropped out', '(D) forced bidder now shows dropped out')
-    check(!(await seen(dash, 'saa-dash-forceout-1')), '(D) no Force Out for a winner (Ada now holds A)')
-    check((await dash.evaluate(() => document.querySelector('[data-testid="saa-dash-standing-A"]').innerText)).includes('Ada Lovelace'), '(D) standing A resolved to winner Ada Lovelace')
-    await dash.close()
+    await live.waitForTimeout(2500)
+    await live.click('[data-testid="saa-dash-forceout-7"]')
+    await live.waitForSelector('[data-testid="saa-dash-forceout-confirm"]', { timeout: 8000 })
+    check((await txt(live, 'saa-dash-forceout-confirm'))?.includes('Grace Kim'), '(D) force-out confirm names the bidder')
+    await live.click('[data-testid="saa-dash-forceout-yes"]')
+    await live.waitForFunction(() => document.querySelector('[data-testid="saa-dash-active"]')?.textContent === '6', null, { timeout: 12000 })
+    check(await txt(live, 'saa-dash-active') === '6', '(D) force-out unblocked the round → active count 7→6')
+    check(await txt(live, 'saa-dash-round') === 'Round 2', '(D) round advanced after the stuck round closed')
+    check(await txt(live, 'saa-dash-acted-7') === 'dropped out', '(D) forced bidder now shows dropped out')
+    check(!(await seen(live, 'saa-dash-forceout-1')), '(D) no Force Out for a winner (Ada now holds A)')
+    check((await live.evaluate(() => document.querySelector('[data-testid="saa-dash-standing-A"]').innerText)).includes('Ada Lovelace'), '(D) standing A resolved to winner Ada Lovelace')
+    await live.close()
   }
 
   await browser.close()

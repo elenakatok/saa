@@ -217,10 +217,7 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
               Submit
             </button>
             {view.isWinner ? (
-              <span data-testid="saa-dropout-blocked" style={{ color: colors.textMuted, fontSize: typography.sizeSm }}>
-                <button data-testid="saa-dropout" style={btn(colors.roleNone, false)} disabled>Drop Out</button>
-                {' '}You cannot drop out — your winning bid is binding.
-              </span>
+              <button data-testid="saa-dropout" style={btn(colors.roleNone, false)} disabled>Drop Out</button>
             ) : (
               <button data-testid="saa-dropout" style={btn(colors.errorAction, canAct && !submitting)} disabled={!canAct || submitting} onClick={() => setConfirmingDrop(true)}>
                 Drop Out
