@@ -216,6 +216,44 @@ export const pushResultsToClassroom = () =>
 export const scoreAndRecord = () =>
   callFn<{ ok: boolean }>('scoreAndRecord', {})
 
+// ── Instructor auction dashboard (Slice 5) ──────────────────────────────────────
+// Instructor-authed (SDK Bearer from the instructor session, like getRoster).
+
+export type InstructorLicenseStanding = {
+  licenseId:          LicenseId
+  standingPrice:      number
+  winnerBidderIndex:  number | null
+  winnerName:         string | null
+}
+export type InstructorBidder = {
+  bidderIndex:    number
+  participantId:  string
+  name:           string
+  hasActed:       boolean   // BOOL only — pending bid amount is never sent (sealed-bid)
+  active:         boolean
+  droppedOut:     boolean
+  isWinner:       boolean
+  winningLicense: LicenseId | null
+}
+export type InstructorGroupAuction = {
+  groupId:            string
+  round:              number
+  status:             'open' | 'ended'
+  activeCount:        number
+  actedCount:         number
+  cumulativeDropouts: number
+  standing:           InstructorLicenseStanding[]
+  bidders:            InstructorBidder[]
+  terminalAllocation: InstructorLicenseStanding[] | null
+}
+export type InstructorAuctionView = { ok: boolean; groups: InstructorGroupAuction[] }
+
+export const getInstructorAuctionView = () =>
+  callFn<InstructorAuctionView>('getInstructorAuctionView', {})
+
+export const forceOut = (groupId: string, bidderIndex: number) =>
+  callFn<{ ok: boolean; roundClosed?: boolean; status?: string }>('forceOut', { group_id: groupId, bidder_index: bidderIndex })
+
 // ── Config API (SettingsPage) ─────────────────────────────────────────────────
 
 export const getGameConfig = () =>

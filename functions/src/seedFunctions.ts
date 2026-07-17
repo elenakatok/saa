@@ -103,6 +103,8 @@ export const seedGroupForTest = onRequest(async (req, res) => {
   const groupId = body.group_id
   const leadId = body.lead_id
   const bidderPids = body.bidder_participants as string[]
+  // Test display names so the instructor dashboard shows real names (roster join).
+  const TEST_NAMES = ['Ada Lovelace', 'Ben Carter', 'Chen Wei', 'Diego Ramos', 'Emma Novak', 'Farah Aziz', 'Grace Kim']
 
   const db = admin.firestore()
   const instanceRef = db.collection('game_instances').doc(gameInstanceId)
@@ -134,11 +136,12 @@ export const seedGroupForTest = onRequest(async (req, res) => {
 
   // Write participant docs.
   const batch = db.batch()
-  for (const pid of bidderPids) {
+  bidderPids.forEach((pid, i) => {
     batch.set(instanceRef.collection('participants').doc(pid), {
       participant_id: pid,
       game_instance_id: gameInstanceId,
       role: 'bidder',
+      display_name: TEST_NAMES[i % TEST_NAMES.length],
       group_id: groupId,
       is_lead: pid === leadId,
       // Fully past setup so routeToPhase lands on a groupId phase (group-reveal) and
@@ -148,7 +151,7 @@ export const seedGroupForTest = onRequest(async (req, res) => {
       confirmed_ready_at: now,
       attendance_confirmed_at: now,
     })
-  }
+  })
   await batch.commit()
 
   res.json({ ok: true, group_id: groupId, lead_id: leadId })

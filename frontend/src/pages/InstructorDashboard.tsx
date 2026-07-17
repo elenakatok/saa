@@ -3,6 +3,7 @@ import { InstructorDashboard as SharedDashboard, type DeadlockResolutionProps, t
 import { auth, functions, rtdb } from '../firebase'
 import { submitInstructorOutcome } from '../api'
 import { saaConfig } from '../gameConfig'
+import SaaAuctionPanel from '../auction/SaaAuctionPanel'
 
 // ── Role labels from game config (SINGLE role — `bidder`) ─────────────────────
 
@@ -66,17 +67,21 @@ function SaaDeadlockControl({ submitting, error, onSubmit }: DeadlockResolutionP
 
 export default function InstructorDashboard() {
   return (
-    <SharedDashboard
-      title="Instructor Dashboard — SAA"
-      roleLabels={roleLabels}
-      DeadlockResolutionControl={SaaDeadlockControl}
-      submitInstructorOutcome={async (groupId, outcome) => { await submitInstructorOutcome(groupId, outcome) }}
-      functions={functions}
-      auth={auth}
-      rtdb={rtdb}
-      settingsRoute="/settings"
-      reportsRoute="/reports"
-      scoreAndRecord={{ callableName: 'scoreAndRecord', label: 'Score & Record' }}
-    />
+    <>
+      {/* The lean auction panel portals itself into SharedDashboard's <main>. */}
+      <SaaAuctionPanel />
+      <SharedDashboard
+        title="Instructor Dashboard — SAA"
+        roleLabels={roleLabels}
+        DeadlockResolutionControl={SaaDeadlockControl}
+        submitInstructorOutcome={async (groupId, outcome) => { await submitInstructorOutcome(groupId, outcome) }}
+        functions={functions}
+        auth={auth}
+        rtdb={rtdb}
+        settingsRoute="/settings"
+        reportsRoute="/reports"
+        scoreAndRecord={{ callableName: 'scoreAndRecord', label: 'Score & Record' }}
+      />
+    </>
   )
 }

@@ -250,6 +250,83 @@ export const getBidderView = onCall(CORS, async (request) => {
   }
 })
 
+// ── getInstructorAuctionView (instructor): the SANITIZED dashboard view ──────────
+// Same paranoid discipline as getBidderView, for the projector: it NEVER exposes a
+// pending (un-closed-round) bid amount — only WHO has acted (a bool). Standing state
+// (resolved prices + winners) is safe. Real student names are joined from the roster.
+// Returns EVERY group's auction in the instance (SAA's dashboard is per-group cards).
+export const getInstructorAuctionView = onCall(CORS, async (request) => {
+  const data = request.data as Record<string, unknown>
+  const gameInstanceId = await extractInstructorGameId(data, isEmu(), authHeaderOf(request))
+
+  const instanceRef = admin.firestore().collection('game_instances').doc(gameInstanceId)
+  const [auctionsSnap, participantsSnap] = await Promise.all([
+    instanceRef.collection('saa_auction').get(),
+    instanceRef.collection('participants').get(),
+  ])
+
+  const nameByPid = new Map<string, string | null>()
+  for (const p of participantsSnap.docs) {
+    const d = p.data() as Record<string, unknown>
+    const nm = ((d['display_name'] ?? d['name'] ?? '') as string).trim()
+    nameByPid.set(p.id, nm || null)
+  }
+
+  const groups = auctionsSnap.docs.map((doc) => {
+    const stored = doc.data() as StoredDoc
+    const state = stored.state
+    const pidByIndex = stored.pid_by_index
+    const nameFor = (idx: number): string => {
+      const pid = pidByIndex[String(idx)]
+      return (pid ? nameByPid.get(pid) : null) || `Bidder ${idx}`
+    }
+
+    const standing = LICENSE_IDS.map((l) => {
+      const s = state.standing[l]
+      return {
+        licenseId: l,
+        standingPrice: s.standingPrice,
+        winnerBidderIndex: s.winnerBidderIndex,
+        winnerName: s.winnerBidderIndex !== null ? nameFor(s.winnerBidderIndex) : null,
+      }
+    })
+
+    const indices = Object.keys(pidByIndex).map(Number).sort((a, b) => a - b)
+    const bidders = indices.map((idx) => {
+      const winningLicense = winningLicenseOf(idx, state.standing)
+      const myAction = state.actions[idx]
+      const droppedOut =
+        state.droppedBidders.includes(idx) || myAction?.type === 'dropout' || myAction?.type === 'forced_out'
+      return {
+        bidderIndex: idx,
+        participantId: pidByIndex[String(idx)],
+        name: nameFor(idx),
+        // hasActed is a BOOL — the amount/license they bid is deliberately NOT included
+        // for the open round (sealed-bid privacy on the projector).
+        hasActed: myAction !== undefined,
+        active: state.activeBidders.includes(idx) && !droppedOut,
+        droppedOut,
+        isWinner: winningLicense !== null,
+        winningLicense,
+      }
+    })
+
+    return {
+      groupId: stored.group_id,
+      round: state.round,
+      status: state.status,
+      activeCount: state.activeBidders.length,
+      actedCount: Object.keys(state.actions).length,
+      cumulativeDropouts: state.cumulativeDropouts,
+      standing,
+      bidders,
+      terminalAllocation: state.status === 'ended' ? standing : null,
+    }
+  })
+
+  return { ok: true as const, groups }
+})
+
 // ── getAuctionState (instructor): full state view (Slice 5 dashboard/harness) ────
 export const getAuctionState = onCall(CORS, async (request) => {
   const data = request.data as Record<string, unknown>
