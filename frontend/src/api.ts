@@ -97,6 +97,64 @@ export const submitKnowledgeCheck = (data: object = {}) =>
 export const submitStaticKnowledgeCheckQuestion = (data: object = {}) =>
   callFn<{ ok: boolean; correct?: boolean }>('submitStaticKnowledgeCheckQuestion', data)
 
+// ── Auction API (Phase 2 Slice 3/4 — the bidder screen) ─────────────────────────
+// Student-authed; the SDK attaches the Firebase Bearer from the signed-in session.
+
+export type LicenseId = 'A' | 'B' | 'C' | 'D' | 'E'
+
+export type BidderLicenseRow = {
+  licenseId:          LicenseId
+  yourValue:          number         // the caller's OWN private value for this license
+  currentHighBid:     number         // standing price
+  currentWinnerIndex: number | null  // revealed (public per §12)
+  youAreWinner:       boolean
+  minIncrement:       number         // per-license band increment (100/50/25)
+  minLegalBidForYou:  number | null  // the caller's min legal bid on this license (null = not allowed)
+}
+
+export type TerminalHolding = { winnerBidderIndex: number | null; standingPrice: number }
+
+export type BidderView = {
+  ok:                          boolean
+  status:                      'open' | 'ended'
+  round:                       number
+  bidderIndex:                 number
+  active:                      boolean
+  droppedOut:                  boolean
+  hasActedThisRound:           boolean
+  isWinner:                    boolean
+  winningLicense:              LicenseId | null
+  currentBidOnWinningLicense:  number | null
+  provisionalProfit:           number
+  licenses:                    BidderLicenseRow[]
+  activeCount:                 number
+  actedCount:                  number
+  terminalAllocation:          Record<LicenseId, TerminalHolding> | null
+  yourTerminalLicense:         LicenseId | null
+  yourTerminalProfit:          number | null
+}
+
+export type ActionResult = {
+  ok:              boolean
+  reason?:         string   // server-authoritative student-facing rejection reason
+  minimumRequired?: number
+  roundClosed?:    boolean
+  status?:         string
+  round?:          number
+}
+
+export const getBidderView = (groupId: string) =>
+  callFn<BidderView>('getBidderView', { group_id: groupId })
+
+export const submitBid = (groupId: string, licenseId: LicenseId, amount: number) =>
+  callFn<ActionResult>('submitBid', { group_id: groupId, license_id: licenseId, amount })
+
+export const holdBid = (groupId: string) =>
+  callFn<ActionResult>('holdBid', { group_id: groupId })
+
+export const dropOut = (groupId: string) =>
+  callFn<ActionResult>('dropOut', { group_id: groupId })
+
 // ── Instructor API ────────────────────────────────────────────────────────────
 
 export type InstructorSessionArgs =

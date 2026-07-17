@@ -2,7 +2,9 @@ import React, { useEffect, useState } from 'react'
 import { doc, getDoc } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { auth, db, rtdb, functions } from '../firebase'
-import { assignRole, confirmReady, verifyAttendanceCode, CLASSROOM_URL } from '../api'
+import { assignRole, confirmReady, verifyAttendanceCode, submitBid, holdBid, dropOut, CLASSROOM_URL } from '../api'
+import { useSaaAuction } from '../auction/useSaaAuction'
+import BidderScreen from '../auction/BidderScreen'
 import {
   useStudentSession,
   KnowledgeCheck,
@@ -183,6 +185,14 @@ export default function Play() {
     return () => { cancelled = true }
   }, [session])
 
+  // ── Live auction overlay (Slice 4) ────────────────────────────────────────
+  // Once the group has a groupId (post-match), poll getBidderView; when the SAA
+  // auction is open/ended it renders BidderScreen ON TOP of the phase machine
+  // (eBay overlay pattern), so the auction takes over the moment the instructor
+  // opens it. Hook is unconditional (idles while groupId is null).
+  const auctionGroupId = 'groupId' in phase ? phase.groupId : null
+  const auction = useSaaAuction(auctionGroupId)
+
   // ── Render: pre-session states (no header) ────────────────────────────────
 
   if (session.kind === 'loading' || (session.kind === 'ready' && phase.name === 'loading')) {
@@ -248,6 +258,20 @@ export default function Play() {
         setCodeError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
         setCodeLoading(false)
       })
+  }
+
+  // ── Live auction: takes over the screen while it is open/ended ────────────
+  if (auctionGroupId && auction.view && (auction.view.status === 'open' || auction.view.status === 'ended')) {
+    return (
+      <BidderScreen
+        view={auction.view}
+        headerLinks={headerLinks ?? []}
+        onSubmitBid={(licenseId, amount) => submitBid(auctionGroupId, licenseId, amount)}
+        onHold={() => holdBid(auctionGroupId)}
+        onDropOut={() => dropOut(auctionGroupId)}
+        onRefresh={auction.refresh}
+      />
+    )
   }
 
   // ── Render: session ready — header persists across all phases ─────────────
