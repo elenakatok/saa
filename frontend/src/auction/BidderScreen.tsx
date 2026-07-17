@@ -136,7 +136,7 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
                   <td style={td}><strong>{row.licenseId}</strong></td>
                   <td style={td} data-testid={`saa-value-${row.licenseId}`}>{row.yourValue}</td>
                   <td style={td} data-testid={`saa-high-${row.licenseId}`}>{row.currentHighBid}</td>
-                  <td style={td}>{row.minIncrement}</td>
+                  <td style={td} data-testid={`saa-inc-${row.licenseId}`}>{row.minIncrement}</td>
                   <td style={td} data-testid={`saa-winner-${row.licenseId}`}>{bidderLabel(row.currentWinnerIndex, view.bidderIndex)}</td>
                   <td style={td}>
                     {canAct ? (

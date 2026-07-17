@@ -141,6 +141,11 @@ export const seedGroupForTest = onRequest(async (req, res) => {
       role: 'bidder',
       group_id: groupId,
       is_lead: pid === leadId,
+      // Fully past setup so routeToPhase lands on a groupId phase (group-reveal) and
+      // the auction overlay can take over — the UI harness drives the auction, not setup.
+      prep_status: 'complete',
+      knowledge_check_score: 1,
+      confirmed_ready_at: now,
       attendance_confirmed_at: now,
     })
   }

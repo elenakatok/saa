@@ -1,0 +1,13 @@
+{
+  "name": "saa",
+  "version": "1.0.0",
+  "description": "SAA harness root (Playwright bidder-screen playthrough)",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}

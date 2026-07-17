@@ -198,9 +198,14 @@ export const getBidderView = onCall(CORS, async (request) => {
   if (bidderIndex === undefined) throw new HttpsError('permission-denied', 'You are not a bidder in this auction.')
 
   const winningLicense = winningLicenseOf(bidderIndex, state.standing)
-  const active = state.activeBidders.includes(bidderIndex)
+  const myAction = state.actions[bidderIndex]
+  // A drop-out (or force-out) is permanent the instant it is submitted — reflect watch
+  // mode immediately, even though activeBidders/droppedBidders only update at round close.
+  const droppedOut =
+    state.droppedBidders.includes(bidderIndex) || myAction?.type === 'dropout' || myAction?.type === 'forced_out'
+  const active = state.activeBidders.includes(bidderIndex) && !droppedOut
   const isOpen = state.status === 'open'
-  const hasActedThisRound = state.actions[bidderIndex] !== undefined
+  const hasActedThisRound = myAction !== undefined
 
   const licenses = LICENSE_IDS.map((l) => {
     const s = state.standing[l]
@@ -230,7 +235,7 @@ export const getBidderView = onCall(CORS, async (request) => {
     round: state.round,
     bidderIndex,
     active,
-    droppedOut: state.droppedBidders.includes(bidderIndex),
+    droppedOut,
     hasActedThisRound,
     isWinner: winningLicense !== null,
     winningLicense,
