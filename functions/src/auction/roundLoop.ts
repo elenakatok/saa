@@ -40,6 +40,18 @@ export interface TerminalHolding {
   standingPrice: number
 }
 
+/** A per-round snapshot of the resolved standing (for the Slice-6 revenue/profit charts). */
+export interface RoundSnapshot {
+  round: number
+  standing: Record<LicenseId, { standingPrice: number; winnerBidderIndex: number | null }>
+}
+
+/** Per-bidder gradebook metadata (NOT a score) — recorded across rounds. */
+export interface BidderMeta {
+  roundsBid: number
+  droppedOutAtRound: number | null
+}
+
 export interface RoundLoopState {
   status: 'open' | 'ended'
   round: number
@@ -54,6 +66,10 @@ export interface RoundLoopState {
   droppedBidders: number[]
   /** Set once, on end: each license's final holder + first-price price. */
   terminalAllocation: Record<LicenseId, TerminalHolding> | null
+  /** Resolved standing after each CLOSED round (round 1..N) — feeds the charts. */
+  history: RoundSnapshot[]
+  /** bidderIndex → rounds_bid / dropped_out_at_round (gradebook metadata). */
+  biddersMeta: Record<number, BidderMeta>
 }
 
 export interface ApplyResult {
@@ -78,6 +94,8 @@ export function openState(bidderIndices: number[]): RoundLoopState {
     cumulativeDropouts: 0,
     droppedBidders: [],
     terminalAllocation: null,
+    history: [],
+    biddersMeta: Object.fromEntries(active.map((b) => [b, { roundsBid: 0, droppedOutAtRound: null }])),
   }
 }
 
@@ -183,6 +201,24 @@ function closeRound(state: RoundLoopState): RoundLoopState {
   next.cumulativeDropouts = cumulativeDropouts
   next.droppedBidders = droppedBidders
   next.actions = {}
+
+  // 3b. Per-round snapshot (charts) + per-bidder metadata (gradebook, not a score).
+  const snapshot: RoundSnapshot = {
+    round: state.round,
+    standing: Object.fromEntries(
+      LICENSE_IDS.map((l) => [l, { standingPrice: newStanding[l].standingPrice, winnerBidderIndex: newStanding[l].winnerBidderIndex }]),
+    ) as RoundSnapshot['standing'],
+  }
+  next.history = [...state.history, snapshot]
+  const meta = { ...state.biddersMeta }
+  for (const b of state.activeAtRoundStart) {
+    const a = state.actions[b]
+    const cur = meta[b] ?? { roundsBid: 0, droppedOutAtRound: null }
+    if (a.type === 'bid') meta[b] = { ...cur, roundsBid: cur.roundsBid + 1 }
+    else if (a.type === 'dropout' || a.type === 'forced_out') meta[b] = { ...cur, droppedOutAtRound: state.round }
+    else meta[b] = cur
+  }
+  next.biddersMeta = meta
 
   // 4. Termination (cumulative). Two-in-one-round ends here too.
   if (cumulativeDropouts >= TERMINATION_DROPOUTS) {

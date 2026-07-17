@@ -10,6 +10,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { chromium } from 'playwright'
+import { createServer } from 'http'
 
 const PROJECT = 'saa-mygames-live'
 const FUNCTIONS = `http://localhost:5005/${PROJECT}/us-central1`
@@ -222,6 +223,77 @@ async function main() {
     check(!(await seen(live, 'saa-dash-forceout-1')), '(D) no Force Out for a winner (Ada now holds A)')
     check((await live.evaluate(() => document.querySelector('[data-testid="saa-dash-standing-A"]').innerText)).includes('Ada Lovelace'), '(D) standing A resolved to winner Ada Lovelace')
     await live.close()
+  }
+
+  // ── (E) grading + reports + dashboard profit — Slice 6 ────────────────────────
+  section('(E) Slice 6 — participation grading, reports, dashboard profit')
+  {
+    const gid = 'ui-s6'; await seedGroup(gid); await open(gid)
+    // full auction to termination: winners F(A@300) B(B@200) G(C@300) D(D@200) E(E@200);
+    // Ada(1) & Chen(3) drop in round 2. (p1=Ada..p7=Grace.)
+    await bidAs(gid, 'p1', 'A', 200); await bidAs(gid, 'p2', 'B', 200); await bidAs(gid, 'p3', 'C', 200)
+    await bidAs(gid, 'p4', 'D', 200); await bidAs(gid, 'p5', 'E', 200); await bidAs(gid, 'p6', 'A', 300); await bidAs(gid, 'p7', 'C', 300)
+    await holdAs(gid, 'p6'); await holdAs(gid, 'p2'); await holdAs(gid, 'p7'); await holdAs(gid, 'p4'); await holdAs(gid, 'p5')
+    await dropAs(gid, 'p1'); await dropAs(gid, 'p3') // 2 drops → END
+
+    // reports: revenue = sum standing prices; profit = sum winner surpluses
+    const rep = (await callFn('getAuctionReport', asDev(gid, {}))).result
+    const g0 = rep.groups[0]
+    check(g0.status === 'ended' && g0.rounds === 2, '(E) auction report: 2 rounds, ended')
+    check(g0.revenueSeries[0].revenue === 1200, `(E) revenue round 1 = Σ standing prices = 1200 (got ${g0.revenueSeries[0].revenue})`)
+    check(g0.profitSeries[0].profit === 1345, `(E) profit round 1 = Σ winner surpluses = 1345 (got ${g0.profitSeries[0].profit})`)
+    const farah = rep.bidders.find((b) => b.name === 'Farah Aziz')
+    check(farah.totalProfit === 199 && farah.wonLicense === 'A', '(E) Farah won A, profit value(A,6)=499−300=199')
+    const ada = rep.bidders.find((b) => b.name === 'Ada Lovelace')
+    check(ada.totalProfit === 0 && ada.droppedOutAtRound === 2, '(E) Ada dropped @ round 2, profit 0')
+    check(ada.roundsBid === 1, '(E) Ada rounds_bid = 1')
+
+    // add a never-attended participant (no role) → must score −2
+    const FS = `http://localhost:8082/v1/projects/saa-mygames-live/databases/(default)/documents`
+    await fetch(`${FS}/game_instances/${gid}/participants/noshow1`, {
+      method: 'PATCH', headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: { participant_id: { stringValue: 'noshow1' }, game_instance_id: { stringValue: gid }, display_name: { stringValue: 'Never Attended' } } }),
+    })
+
+    // participation push via a mock classroom callback (POST + 200)
+    const received = []
+    const mock = createServer((req, res) => {
+      let body = ''
+      req.on('data', (c) => { body += c })
+      req.on('end', () => { try { received.push(JSON.parse(body)) } catch { /* */ } ; res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}') })
+    })
+    await new Promise((r) => mock.listen(0, r))
+    const mockPort = mock.address().port
+    const scored = (await callFn('scoreAndRecord', { _dev: { game_instance_id: gid, callback_url: `http://localhost:${mockPort}`, callback_secret: 'test' } })).result
+    check(scored?.ok === true, '(E) scoreAndRecord succeeded')
+    check(scored.push?.succeeded >= 8 && scored.push?.failed?.length === 0, `(E) push: POST+200 for all results (${scored.push?.succeeded} ok, ${scored.push?.failed?.length} failed)`)
+    mock.close()
+
+    const byPid = new Map(received.map((r) => [r.participant_id, r]))
+    // present bidders (incl. dropped) → completed + normalized 0 (degenerate pool); dropped ≠ no_show
+    const adaR = byPid.get('p1'), farahR = byPid.get('p6'), noshowR = byPid.get('noshow1')
+    check(farahR?.status === 'completed' && farahR?.normalized_score === 0, '(E) present bidder → completed, normalized 0')
+    check(adaR?.status === 'completed' && adaR?.normalized_score === 0, '(E) a DROPPED-OUT bidder scores the participation point (completed, NOT no_show)')
+    check(noshowR?.status === 'no_show' && noshowR?.normalized_score === -2, '(E) never-attended student → no_show, −2')
+    // gradebook metadata rides in the details blob (NOT a score)
+    check(farahR?.details?.rounds_bid === 1 && farahR?.details?.total_profit === 199, '(E) details blob carries rounds_bid + total_profit (metadata)')
+    check(adaR?.details?.dropped_out_at_round === 2, '(E) details blob carries dropped_out_at_round')
+
+    // getReportData rows now carry profit + metadata (tables report)
+    const rd = (await callFn('getReportData', asDev(gid, {}))).result
+    const farahRow = rd.rows.find((r) => r.display_name === 'Farah Aziz')
+    check(farahRow?.total_profit === 199 && farahRow?.rounds_bid === 1, '(E) tables report: total_profit 199 + rounds_bid 1')
+    check(rd.rows.find((r) => r.display_name === 'Ada Lovelace')?.dropped_out_at_round === 2, '(E) tables report: dropped_out_at_round 2')
+
+    // dashboard Outcome column shows PROFIT (browser)
+    const dash = await ctx.newPage()
+    await dash.goto(`${FE}/dashboard?_dev_game_instance_id=${gid}&_session=tab`)
+    await dash.waitForSelector('[data-testid="roster-table"] table', { timeout: 25000 })
+    await dash.waitForFunction(() => (document.querySelector('[data-testid="roster-table"]')?.textContent ?? '').includes('$199'), null, { timeout: 12000 })
+    const roster = await dash.evaluate(() => document.querySelector('[data-testid="roster-table"]').textContent)
+    check(roster.includes('$199'), '(E) dashboard Outcome column shows PROFIT ($199 for Farah)')
+    check(roster.includes('Profit'), '(E) dashboard Outcome header relabeled to "Profit"')
+    await dash.close()
   }
 
   await browser.close()

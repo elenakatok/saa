@@ -4,6 +4,7 @@ import { auth, functions, rtdb } from '../firebase'
 import { submitInstructorOutcome } from '../api'
 import { saaConfig } from '../gameConfig'
 import StartAuctionBox from '../auction/StartAuctionBox'
+import OutcomeProfitOverride from '../auction/OutcomeProfitOverride'
 
 // ── Role labels from game config (SINGLE role — `bidder`) ─────────────────────
 
@@ -68,8 +69,9 @@ function SaaDeadlockControl({ submitting, error, onSubmit }: DeadlockResolutionP
 export default function InstructorDashboard() {
   return (
     <>
-      {/* eBay-style start box above the roster (start here) + nav link to /live (watch). */}
+      {/* eBay-style start box above the roster + nav link; Outcome column shows PROFIT. */}
       <StartAuctionBox />
+      <OutcomeProfitOverride />
       <SharedDashboard
         title="Instructor Dashboard — SAA"
         roleLabels={roleLabels}

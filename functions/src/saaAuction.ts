@@ -111,6 +111,9 @@ async function applyStudentAction(
       index_by_pid: stored.index_by_pid,
       updated_at: FieldValue.serverTimestamp(),
     })
+    if (result.state.status === 'ended') {
+      writeEndOutcomes(tx, admin.firestore().collection('game_instances').doc(gameInstanceId), stored, result.state)
+    }
     return {
       ok: true as const,
       roundClosed: result.roundClosed,
@@ -176,6 +179,9 @@ export const forceOut = onCall(CORS, async (request) => {
       index_by_pid: stored.index_by_pid,
       updated_at: FieldValue.serverTimestamp(),
     })
+    if (result.state.status === 'ended') {
+      writeEndOutcomes(tx, admin.firestore().collection('game_instances').doc(gameInstanceId), stored, result.state)
+    }
     return { ok: true as const, roundClosed: result.roundClosed, status: result.state.status, round: result.state.round }
   })
 })
@@ -248,6 +254,113 @@ export const getBidderView = onCall(CORS, async (request) => {
     yourTerminalLicense: state.status === 'ended' ? winningLicense : null,
     yourTerminalProfit: state.status === 'ended' ? provisionalProfit(bidderIndex, state.standing) : null,
   }
+})
+
+// ── per-participant auction outcome (written to participant docs at auction END) ─
+// Lets getReportData (tables), the dashboard Outcome column, and scoreAndRecord read
+// each bidder's total profit + gradebook metadata without re-reading the auction doc.
+export interface ParticipantOutcome {
+  pid: string
+  total_profit: number
+  won_license: LicenseId | null
+  rounds_bid: number
+  dropped_out_at_round: number | null
+}
+function participantOutcomes(state: RoundLoopState, pidByIndex: Record<string, string>): ParticipantOutcome[] {
+  const out: ParticipantOutcome[] = []
+  for (const key of Object.keys(pidByIndex)) {
+    const idx = Number(key)
+    const won = winningLicenseOf(idx, state.standing)
+    const m = state.biddersMeta[idx] ?? { roundsBid: 0, droppedOutAtRound: null }
+    out.push({
+      pid: pidByIndex[key],
+      total_profit: won ? valueFor(won, idx) - state.standing[won].standingPrice : 0,
+      won_license: won,
+      rounds_bid: m.roundsBid,
+      dropped_out_at_round: m.droppedOutAtRound,
+    })
+  }
+  return out
+}
+
+// On auction END, denormalize each bidder's outcome onto their participant doc and
+// mark the group completed (so the generic finalize/grading path + getReportData +
+// the dashboard read profit/metadata without re-reading the auction doc). Scoring is
+// participation-only, so the group's outcome content is irrelevant to any grade.
+function writeEndOutcomes(
+  tx: FirebaseFirestore.Transaction,
+  instanceRef: FirebaseFirestore.DocumentReference,
+  stored: StoredDoc,
+  state: RoundLoopState,
+) {
+  for (const o of participantOutcomes(state, stored.pid_by_index)) {
+    tx.set(instanceRef.collection('participants').doc(o.pid), {
+      // top-level for getReportData (tables) + the dashboard Outcome override
+      total_profit: o.total_profit,
+      won_license: o.won_license,
+      rounds_bid: o.rounds_bid,
+      dropped_out_at_round: o.dropped_out_at_round,
+      // details blob rides to the gradebook via toGameResult (metadata, NOT a score)
+      details: {
+        rounds_bid: o.rounds_bid,
+        dropped_out_at_round: o.dropped_out_at_round,
+        total_profit: o.total_profit,
+        won_license: o.won_license,
+      },
+    }, { merge: true })
+  }
+  tx.set(instanceRef.collection('groups').doc(stored.group_id), {
+    status: 'completed',
+    agreement_reached: true,
+    outcome: { placeholder_result: 0 },
+    saa_auction_ended_at: FieldValue.serverTimestamp(),
+  }, { merge: true })
+}
+
+// ── getAuctionReport (instructor): chart series + per-bidder profit/metadata ──────
+export const getAuctionReport = onCall(CORS, async (request) => {
+  const data = request.data as Record<string, unknown>
+  const gameInstanceId = await extractInstructorGameId(data, isEmu(), authHeaderOf(request))
+  const instanceRef = admin.firestore().collection('game_instances').doc(gameInstanceId)
+  const [auctionsSnap, participantsSnap] = await Promise.all([
+    instanceRef.collection('saa_auction').get(),
+    instanceRef.collection('participants').get(),
+  ])
+  const nameByPid = new Map<string, string | null>()
+  for (const p of participantsSnap.docs) {
+    const d = p.data() as Record<string, unknown>
+    nameByPid.set(p.id, (((d['display_name'] ?? d['name'] ?? '') as string).trim()) || null)
+  }
+  const sorted = auctionsSnap.docs.slice().sort((a, b) => a.id.localeCompare(b.id))
+
+  const groups = sorted.map((doc, gi) => {
+    const stored = doc.data() as StoredDoc
+    const state = stored.state
+    const revenueSeries = state.history.map((h) => ({
+      round: h.round,
+      revenue: LICENSE_IDS.reduce((s, l) => s + h.standing[l].standingPrice, 0),
+    }))
+    const profitSeries = state.history.map((h) => ({
+      round: h.round,
+      profit: LICENSE_IDS.reduce((s, l) => {
+        const w = h.standing[l].winnerBidderIndex
+        return w !== null ? s + (valueFor(l, w) - h.standing[l].standingPrice) : s
+      }, 0),
+    }))
+    return { groupId: stored.group_id, groupNumber: gi + 1, status: state.status, rounds: state.history.length, revenueSeries, profitSeries }
+  })
+
+  const bidders = sorted.flatMap((doc, gi) => {
+    const stored = doc.data() as StoredDoc
+    const pidByIndex = stored.pid_by_index
+    const nameFor = (idx: number) => (pidByIndex[String(idx)] ? nameByPid.get(pidByIndex[String(idx)]) : null) || `Bidder ${idx}`
+    return participantOutcomes(stored.state, pidByIndex).map((o) => {
+      const idx = Number(Object.keys(pidByIndex).find((k) => pidByIndex[k] === o.pid))
+      return { participantId: o.pid, name: nameFor(idx), groupNumber: gi + 1, bidderIndex: idx, totalProfit: o.total_profit, wonLicense: o.won_license, roundsBid: o.rounds_bid, droppedOutAtRound: o.dropped_out_at_round }
+    })
+  })
+
+  return { ok: true as const, groups, bidders }
 })
 
 // ── getInstructorAuctionView (instructor): the SANITIZED dashboard view ──────────

@@ -32,6 +32,11 @@ export type ReportRow = {
   text_answers: Record<string, string>
   /** The group's (placeholder) outcome object, or null. Generic — Phase 2 replaces it. */
   outcome: Outcome | null
+  // ── Auction outcome (a GAME result, never a grade) + gradebook metadata ──
+  total_profit: number | null
+  won_license: string | null
+  rounds_bid: number | null
+  dropped_out_at_round: number | null
 }
 
 export const getReportData = onCall({ cors: saaGameDef.corsOrigins }, async (request) => {
@@ -106,6 +111,10 @@ export const getReportData = onCall({ cors: saaGameDef.corsOrigins }, async (req
         knowledge_check_score: (d['knowledge_check_score'] ?? null) as number | null,
         text_answers,
         outcome,
+        total_profit: (d['total_profit'] ?? null) as number | null,
+        won_license: (d['won_license'] ?? null) as string | null,
+        rounds_bid: (d['rounds_bid'] ?? null) as number | null,
+        dropped_out_at_round: (d['dropped_out_at_round'] ?? null) as number | null,
       })
     }
 

@@ -279,7 +279,35 @@ export type ReportRow = {
   knowledge_check_score: number | null
   text_answers:          Record<string, string>
   outcome:               Record<string, unknown> | null
+  total_profit:          number | null  // GAME outcome (never a grade)
+  won_license:           string | null
+  rounds_bid:            number | null  // gradebook metadata
+  dropped_out_at_round:  number | null
 }
+
+// ── Auction report (Slice 6 charts + tables) ────────────────────────────────────
+export type GroupSeries = {
+  groupId:       string
+  groupNumber:   number
+  status:        'open' | 'ended'
+  rounds:        number
+  revenueSeries: { round: number; revenue: number }[]
+  profitSeries:  { round: number; profit: number }[]
+}
+export type AuctionReportBidder = {
+  participantId:     string
+  name:              string
+  groupNumber:       number
+  bidderIndex:       number
+  totalProfit:       number
+  wonLicense:        LicenseId | null
+  roundsBid:         number
+  droppedOutAtRound: number | null
+}
+export type AuctionReport = { ok: boolean; groups: GroupSeries[]; bidders: AuctionReportBidder[] }
+
+export const getAuctionReport = () =>
+  callFn<AuctionReport>('getAuctionReport', {})
 
 export type ReportQuestionMeta = { field: string; prompt: string; role_target: string }
 

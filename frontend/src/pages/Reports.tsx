@@ -4,8 +4,9 @@ import { httpsCallable } from 'firebase/functions'
 import { signInWithCustomToken, signOut } from 'firebase/auth'
 import { auth, functions } from '../firebase'
 import { GameHeader } from '@mygames/game-ui'
-import { saaConfig, FIELD_LABELS, formatField, type OutcomeSchema } from '../gameConfig'
-import type { ReportRow, ReportQuestionMeta } from '../api'
+import { saaConfig, type OutcomeSchema } from '../gameConfig'
+import { getAuctionReport, type ReportRow, type ReportQuestionMeta, type AuctionReport } from '../api'
+import LineChartSVG, { type ChartSeries } from '../components/LineChartSVG'
 
 // ── Role label (single role — `bidder`) ───────────────────────────────────────
 
@@ -76,7 +77,8 @@ export default function Reports() {
   // ── Data load ──────────────────────────────────────────────────────────────
   const [rows,      setRows]      = useState<ReportRow[] | null>(null)
   const [questions, setQuestions] = useState<ReportQuestionMeta[]>([])
-  const [schema,    setSchema]    = useState<OutcomeSchema | null>(null)
+  const [, setSchema]             = useState<OutcomeSchema | null>(null)
+  const [auction,   setAuction]   = useState<AuctionReport | null>(null)
   const [loading,   setLoading]   = useState(false)
   const [error,     setError]     = useState<string | null>(null)
 
@@ -85,10 +87,11 @@ export default function Reports() {
     setLoading(true)
     setError(null)
     const fn = httpsCallable<object, { ok: boolean; rows: ReportRow[]; questions: ReportQuestionMeta[]; schema: OutcomeSchema }>(functions, 'getReportData')
-    fn({}).then(r => {
+    Promise.all([fn({}), getAuctionReport().catch(() => null)]).then(([r, a]) => {
       setRows(r.data.rows)
       setQuestions(r.data.questions)
       setSchema(r.data.schema)
+      if (a) setAuction(a)
       setLoading(false)
     }).catch((err: unknown) => {
       setError(err instanceof Error ? err.message : 'Failed to load report data.')
@@ -96,9 +99,18 @@ export default function Reports() {
     })
   }, [sessionReady])
 
-  // Placeholder outcome fields to surface as columns (non-text schema fields).
-  const outcomeCols = (schema ?? []).filter(f => f.type !== 'text')
   const textFields  = questions.map(q => q.field)
+
+  // Chart series (one line per group) — each group plotted to its own last round.
+  const revenueChart: ChartSeries[] = (auction?.groups ?? []).map(g => ({
+    label: `Group ${g.groupNumber}`,
+    points: g.revenueSeries.map(p => ({ x: p.round, y: p.revenue })),
+  }))
+  const profitChart: ChartSeries[] = (auction?.groups ?? []).map(g => ({
+    label: `Group ${g.groupNumber}`,
+    points: g.profitSeries.map(p => ({ x: p.round, y: p.profit })),
+  }))
+  const hasCharts = revenueChart.some(s => s.points.length > 0)
 
   // ── Render ─────────────────────────────────────────────────────────────────
   if (authError) {
@@ -135,11 +147,27 @@ export default function Reports() {
       <main style={{ flex: 1, padding: '1rem 1.5rem' }}>
         {error && <p style={{ color: '#c00', marginBottom: '1rem' }}>{error}</p>}
 
-        <p style={{ margin: '0 0 0.75rem', fontSize: '0.85rem', color: '#666' }}>
-          Read-only participation + Knowledge Check report. Grading is participation-only, so raw
-          scores are intentionally uniform across present bidders. The placeholder outcome is a
-          Phase-1 stand-in for the live auction result.
+        <p style={{ margin: '0 0 1rem', fontSize: '0.85rem', color: '#666' }}>
+          Grading is <strong>participation-only</strong> (raw scores are uniform across present
+          bidders by design; a bidder who dropped out still played and earns the point). Profit is a{' '}
+          <strong>game outcome, never a grade</strong>.
         </p>
+
+        {hasCharts && (
+          <>
+            <section style={{ marginBottom: '1.5rem' }}>
+              <h3 style={{ margin: '0 0 0.35rem', fontSize: '1rem' }}>Revenue over rounds</h3>
+              <p style={{ margin: '0 0 0.4rem', fontSize: '0.8rem', color: '#888' }}>Total of the five licenses’ standing prices each round (what the seller collects) — one line per group.</p>
+              <LineChartSVG testId="saa-report-revenue" series={revenueChart} xLabel="Round" yLabel="Revenue" yFormat={(n) => '$' + n.toLocaleString('en-US')} />
+            </section>
+            <section style={{ marginBottom: '1.5rem' }}>
+              <h3 style={{ margin: '0 0 0.35rem', fontSize: '1rem' }}>Profit over rounds</h3>
+              <p style={{ margin: '0 0 0.4rem', fontSize: '0.8rem', color: '#888' }}>Sum of each provisional winner’s (value − standing price) each round — one line per group.</p>
+              <LineChartSVG testId="saa-report-profit" series={profitChart} xLabel="Round" yLabel="Profit" yFormat={(n) => '$' + n.toLocaleString('en-US')} />
+            </section>
+            <h3 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>Per-bidder report</h3>
+          </>
+        )}
 
         {rows == null ? (
           <p style={{ color: '#888', fontSize: '0.9rem' }}>{loading ? 'Loading…' : 'No data.'}</p>
@@ -147,17 +175,17 @@ export default function Reports() {
           <p style={{ color: '#888', fontSize: '0.9rem' }}>No finalized participants yet.</p>
         ) : (
           <div style={{ overflowX: 'auto', border: '1px solid #ddd', borderRadius: 6 }}>
-            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 640 }}>
+            <table data-testid="saa-report-table" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 640 }}>
               <thead>
                 <tr>
                   <th style={thStyle}>Name</th>
                   <th style={thStyle}>Group #</th>
                   <th style={thStyle}>Role</th>
-                  <th style={thStyle}>KC score</th>
-                  <th style={thStyle}>Raw score</th>
-                  {outcomeCols.map(f => (
-                    <th key={f.key} style={thStyle}>{FIELD_LABELS[f.key] ?? f.key}</th>
-                  ))}
+                  <th style={{ ...thStyle, background: '#eef6ee' }}>Participation</th>
+                  <th style={{ ...thStyle, background: '#eef6ee' }}>KC score</th>
+                  <th style={{ ...thStyle, background: '#fdf4e7' }}>Profit (outcome)</th>
+                  <th style={thStyle}>Rounds bid</th>
+                  <th style={thStyle}>Dropped @ round</th>
                   {textFields.map(field => {
                     const q = questions.find(qq => qq.field === field)
                     return <th key={field} style={thStyle}>{q?.prompt ?? field}</th>
@@ -166,17 +194,17 @@ export default function Reports() {
               </thead>
               <tbody>
                 {rows.map(r => (
-                  <tr key={r.participant_id}>
+                  <tr key={r.participant_id} data-testid={`saa-report-row-${r.participant_id}`}>
                     <td style={tdStyle}>{r.display_name}</td>
                     <td style={numTd}>{r.group_number ?? '—'}</td>
                     <td style={tdStyle}>{ROLE_LABELS[r.role] ?? r.role}</td>
-                    <td style={numTd}>{fmtNum(r.knowledge_check_score)}</td>
-                    <td style={numTd}>{fmtNum(r.raw_score)}</td>
-                    {outcomeCols.map(f => (
-                      <td key={f.key} style={numTd}>
-                        {r.outcome && r.outcome[f.key] != null ? formatField(f, r.outcome[f.key]) : '—'}
-                      </td>
-                    ))}
+                    <td style={{ ...numTd, background: '#f6fbf6' }}>{fmtNum(r.raw_score)}</td>
+                    <td style={{ ...numTd, background: '#f6fbf6' }}>{fmtNum(r.knowledge_check_score)}</td>
+                    <td style={{ ...numTd, background: '#fdfaf3' }} data-testid={`saa-report-profit-${r.participant_id}`}>
+                      {r.total_profit == null ? '—' : '$' + r.total_profit.toLocaleString('en-US')}
+                    </td>
+                    <td style={numTd}>{fmtNum(r.rounds_bid)}</td>
+                    <td style={numTd}>{r.dropped_out_at_round ?? '—'}</td>
                     {textFields.map(field => (
                       <td key={field} style={tdStyle}>
                         {r.text_answers[field]
@@ -188,6 +216,9 @@ export default function Reports() {
                 ))}
               </tbody>
             </table>
+            <p style={{ margin: '0.5rem 0.6rem', fontSize: '0.75rem', color: '#888' }}>
+              Green = grade inputs (participation + KC). Amber = game outcome (profit) — displayed, never graded.
+            </p>
           </div>
         )}
       </main>
