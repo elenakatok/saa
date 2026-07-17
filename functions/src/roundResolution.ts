@@ -10,3 +10,4 @@
 export * from './auction/valueMatrix'
 export * from './auction/increment'
 export * from './auction/resolution'
+export * from './auction/validateBid'
