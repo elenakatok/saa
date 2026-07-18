@@ -132,6 +132,10 @@ export const saaGameDef: GameDefinition = {
   configFields: [
     { key: 'bidder_role_name', kind: 'string', default: 'Bidder' },
     { key: 'bidder_sheet_url', kind: 'url',    default: '/role-info/saa.pdf' },
+    // Efficiency benchmark denominator (Slice 6 Statistics table). The efficient-
+    // allocation max surplus is an assignment-optimization with a 5-vs-7 modeling
+    // choice, so the instructor sets it. Default = 3119.
+    { key: 'efficient_max',    kind: 'positiveInt', default: 3119 },
   ],
 
   // Info page links — keys must appear in configFields above.

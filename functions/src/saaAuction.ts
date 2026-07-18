@@ -37,6 +37,9 @@ const authHeaderOf = (req: CallableRequest): string | undefined =>
 
 const CORS = { cors: saaGameDef.corsOrigins }
 
+/** Efficiency denominator default — the efficient-allocation max surplus (§ report). */
+const DEFAULT_EFFICIENT_MAX = 3119
+
 function stateDoc(gameInstanceId: string, groupId: string) {
   return admin.firestore().collection('game_instances').doc(gameInstanceId).collection('saa_auction').doc(groupId)
 }
@@ -322,15 +325,19 @@ export const getAuctionReport = onCall(CORS, async (request) => {
   const data = request.data as Record<string, unknown>
   const gameInstanceId = await extractInstructorGameId(data, isEmu(), authHeaderOf(request))
   const instanceRef = admin.firestore().collection('game_instances').doc(gameInstanceId)
-  const [auctionsSnap, participantsSnap] = await Promise.all([
+  const [auctionsSnap, participantsSnap, configSnap] = await Promise.all([
     instanceRef.collection('saa_auction').get(),
     instanceRef.collection('participants').get(),
+    instanceRef.collection('config').doc('main').get(),
   ])
   const nameByPid = new Map<string, string | null>()
   for (const p of participantsSnap.docs) {
     const d = p.data() as Record<string, unknown>
     nameByPid.set(p.id, (((d['display_name'] ?? d['name'] ?? '') as string).trim()) || null)
   }
+  // Efficiency denominator — the instructor-set efficient-allocation max surplus.
+  const cfg = (configSnap.data() ?? {}) as Record<string, unknown>
+  const efficientMax = Number(cfg['efficient_max'] ?? DEFAULT_EFFICIENT_MAX) || DEFAULT_EFFICIENT_MAX
   const sorted = auctionsSnap.docs.slice().sort((a, b) => a.id.localeCompare(b.id))
 
   const groups = sorted.map((doc, gi) => {
@@ -347,7 +354,23 @@ export const getAuctionReport = onCall(CORS, async (request) => {
         return w !== null ? s + (valueFor(l, w) - h.standing[l].standingPrice) : s
       }, 0),
     }))
-    return { groupId: stored.group_id, groupNumber: gi + 1, status: state.status, rounds: state.history.length, revenueSeries, profitSeries }
+    // Final (auction-end) per-group statistics for the Statistics table.
+    const finalRevenue = LICENSE_IDS.reduce((s, l) => s + state.standing[l].standingPrice, 0)
+    const finalProfit = LICENSE_IDS.reduce((s, l) => {
+      const w = state.standing[l].winnerBidderIndex
+      return w !== null ? s + (valueFor(l, w) - state.standing[l].standingPrice) : s
+    }, 0)
+    const totalSurplus = finalRevenue + finalProfit
+    const winnersByLicense = Object.fromEntries(
+      LICENSE_IDS.map((l) => [l, state.standing[l].winnerBidderIndex]),
+    ) as Record<LicenseId, number | null>
+    return {
+      groupId: stored.group_id, groupNumber: gi + 1, status: state.status, rounds: state.history.length,
+      revenueSeries, profitSeries,
+      finalRevenue, finalProfit, totalSurplus,
+      efficiency: efficientMax > 0 ? (totalSurplus / efficientMax) * 100 : 0,
+      winnersByLicense,
+    }
   })
 
   const bidders = sorted.flatMap((doc, gi) => {
@@ -360,7 +383,7 @@ export const getAuctionReport = onCall(CORS, async (request) => {
     })
   })
 
-  return { ok: true as const, groups, bidders }
+  return { ok: true as const, efficientMax, groups, bidders }
 })
 
 // ── getInstructorAuctionView (instructor): the SANITIZED dashboard view ──────────

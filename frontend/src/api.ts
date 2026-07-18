@@ -287,12 +287,18 @@ export type ReportRow = {
 
 // ── Auction report (Slice 6 charts + tables) ────────────────────────────────────
 export type GroupSeries = {
-  groupId:       string
-  groupNumber:   number
-  status:        'open' | 'ended'
-  rounds:        number
-  revenueSeries: { round: number; revenue: number }[]
-  profitSeries:  { round: number; profit: number }[]
+  groupId:          string
+  groupNumber:      number
+  status:           'open' | 'ended'
+  rounds:           number
+  revenueSeries:    { round: number; revenue: number }[]
+  profitSeries:     { round: number; profit: number }[]
+  // Final (auction-end) per-group statistics.
+  finalRevenue:     number
+  finalProfit:      number
+  totalSurplus:     number
+  efficiency:       number  // totalSurplus / efficientMax × 100
+  winnersByLicense: Record<LicenseId, number | null>  // license → winning bidder NUMBER
 }
 export type AuctionReportBidder = {
   participantId:     string
@@ -304,7 +310,7 @@ export type AuctionReportBidder = {
   roundsBid:         number
   droppedOutAtRound: number | null
 }
-export type AuctionReport = { ok: boolean; groups: GroupSeries[]; bidders: AuctionReportBidder[] }
+export type AuctionReport = { ok: boolean; efficientMax: number; groups: GroupSeries[]; bidders: AuctionReportBidder[] }
 
 export const getAuctionReport = () =>
   callFn<AuctionReport>('getAuctionReport', {})

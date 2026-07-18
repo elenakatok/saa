@@ -279,11 +279,18 @@ async function main() {
     check(farahR?.details?.rounds_bid === 1 && farahR?.details?.total_profit === 199, '(E) details blob carries rounds_bid + total_profit (metadata)')
     check(adaR?.details?.dropped_out_at_round === 2, '(E) details blob carries dropped_out_at_round')
 
-    // getReportData rows now carry profit + metadata (tables report)
-    const rd = (await callFn('getReportData', asDev(gid, {}))).result
-    const farahRow = rd.rows.find((r) => r.display_name === 'Farah Aziz')
-    check(farahRow?.total_profit === 199 && farahRow?.rounds_bid === 1, '(E) tables report: total_profit 199 + rounds_bid 1')
-    check(rd.rows.find((r) => r.display_name === 'Ada Lovelace')?.dropped_out_at_round === 2, '(E) tables report: dropped_out_at_round 2')
+    // per-group STATISTICS table (rev): revenue/profit/total/efficiency + A–E winner NUMBERS
+    check(g0.finalRevenue === 1200, `(rev) stats revenue = Σ final winning prices = 1200 (got ${g0.finalRevenue})`)
+    check(g0.finalProfit === 1345, '(rev) stats profit = Σ winner surpluses = 1345')
+    check(g0.totalSurplus === 2545, '(rev) stats total surplus = revenue + profit = 2545')
+    check(JSON.stringify(g0.winnersByLicense) === JSON.stringify({ A: 6, B: 2, C: 7, D: 4, E: 5 }), '(rev) A–E show winning bidder NUMBERS (A6 B2 C7 D4 E5)')
+    check(rep.efficientMax === 3119, '(rev) default efficient max = 3119')
+    check(g0.efficiency.toFixed(2) === '81.60', `(rev) efficiency @ default 3119 = 2545/3119×100 = 81.60 (got ${g0.efficiency.toFixed(2)})`)
+    // the instructor setting feeds the denominator
+    await callFn('updateGameConfig', asDev(gid, { efficient_max: 2545 }))
+    const rep2 = (await callFn('getAuctionReport', asDev(gid, {}))).result
+    check(rep2.efficientMax === 2545, '(rev) instructor-set efficient max (2545) is read back')
+    check(rep2.groups[0].efficiency.toFixed(2) === '100.00', '(rev) efficiency @ 2545 = 100.00 — the setting feeds the denominator')
 
     // dashboard Outcome column shows PROFIT (browser)
     const dash = await ctx.newPage()

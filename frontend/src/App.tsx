@@ -18,6 +18,18 @@ const saaInfoLinks = [
   ]},
 ]
 
+// Instructor-editable settings beyond role names / sheets (mirrors Spectrum's
+// spectrumConfigSections). The efficiency-benchmark denominator lives here.
+const saaConfigSections = [
+  {
+    id: 'auction',
+    title: 'Auction',
+    fields: [
+      { key: 'efficient_max', label: 'Efficient max surplus (efficiency benchmark)', kind: 'positiveInt' as const, placeholder: '3119' },
+    ],
+  },
+]
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -34,6 +46,7 @@ export default function App() {
             auth={auth}
             roleLabels={saaRoleLabels}
             roleInfoLinks={saaInfoLinks}
+            configSections={saaConfigSections}
           />
         } />
       </Routes>
