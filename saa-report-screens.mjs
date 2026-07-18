@@ -47,12 +47,13 @@ async function main() {
   {
     const page = await ctx.newPage()
     await page.goto(`${FE}/reports?_dev_game_instance_id=${gid}`)
+    // Reports now render as a ReportBoard grid of tiles; open the Statistics tile → modal.
+    await page.waitForSelector('[data-testid="saa-tile-stats"]', { timeout: 25000 })
+    await page.click('[data-testid="saa-tile-stats"]')
     await page.waitForSelector('[data-testid="saa-stats-table"]', { timeout: 25000 })
     await page.waitForTimeout(400)
-    // Tight shot of the Statistics section (heading + table + caption).
-    const section = page.locator('section:has([data-testid="saa-stats-table"])')
-    await section.scrollIntoViewIfNeeded()
-    await section.screenshot({ path: `${ART}/16-report-statistics.png` })
+    // Tight shot of the Statistics table inside its modal.
+    await page.locator('[data-testid="saa-stats-table"]').screenshot({ path: `${ART}/16-report-statistics.png` })
     console.log('shot: 16-report-statistics.png')
     await page.close()
   }

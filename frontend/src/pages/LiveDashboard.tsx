@@ -80,10 +80,15 @@ function AuctionCard({ n, a, onForceOut }: { n: number; a: InstructorGroupAuctio
         <tbody>
           {a.bidders.map((b) => {
             const canForce = a.status === 'open' && b.active && !b.droppedOut && !b.isWinner
+            // Once the auction has ENDED there is no "this round" — show each bidder's
+            // terminal state (dropped out / license won / —), never a stale "still deciding".
+            const roundCell = a.status === 'ended'
+              ? (b.droppedOut ? 'dropped out' : b.isWinner ? `License ${b.winningLicense} won` : '—')
+              : (b.droppedOut ? 'dropped out' : b.hasActed ? 'acted this round' : 'still deciding')
             return (
               <tr key={b.bidderIndex} data-testid={`saa-dash-bidder-${b.bidderIndex}`}>
                 <td style={td}>{b.name} <span style={{ color: colors.textMuted }}>(B{b.bidderIndex})</span></td>
-                <td style={td} data-testid={`saa-dash-acted-${b.bidderIndex}`}>{b.droppedOut ? 'dropped out' : b.hasActed ? 'acted this round' : 'still deciding'}</td>
+                <td style={td} data-testid={`saa-dash-acted-${b.bidderIndex}`}>{roundCell}</td>
                 <td style={td}>{b.isWinner ? `License ${b.winningLicense}` : '—'}</td>
                 <td style={td}>
                   {canForce && (

@@ -309,8 +309,21 @@ export type AuctionReportBidder = {
   wonLicense:        LicenseId | null
   roundsBid:         number
   droppedOutAtRound: number | null
+  // Optional free-text prep answers keyed by question field. SAA defines NO text prep
+  // questions today (its KC items are all multiple-choice), so getAuctionReport does not
+  // send this yet; it is here so the Reports page can surface text answers the same way
+  // eBay does the moment any text prep question is added + carried on the report.
+  textAnswers?:      Record<string, string>
 }
-export type AuctionReport = { ok: boolean; efficientMax: number; groups: GroupSeries[]; bidders: AuctionReportBidder[] }
+export type AuctionReport = {
+  ok: boolean
+  efficientMax: number
+  groups: GroupSeries[]
+  bidders: AuctionReportBidder[]
+  // Optional text prep-question metadata (field/prompt/role_target). Empty/absent today
+  // — see AuctionReportBidder.textAnswers. Feeds the eBay-style export tiles on /reports.
+  questions?: ReportQuestionMeta[]
+}
 
 export const getAuctionReport = () =>
   callFn<AuctionReport>('getAuctionReport', {})

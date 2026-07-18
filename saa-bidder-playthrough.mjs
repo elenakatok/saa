@@ -74,9 +74,14 @@ async function main() {
     check((await txt(page, 'saa-submit'))?.trim() === 'Submit', '(rev-1) submit button label is just "Submit"')
     check((await txt(page, 'saa-dropout'))?.trim() === 'Drop Out', '(rev-1) drop-out button label is just "Drop Out"')
 
-    // (4) one-bid enforcement: selecting A disables the other rows' inputs
+    // (4) one-bid rule is enforced at SUBMIT, never by disabling inputs — all five stay editable
     await page.fill('[data-testid="saa-bid-input-A"]', '300')
-    check(await page.isDisabled('[data-testid="saa-bid-input-B"]'), '(4) selecting license A disables the B bid field (one bid/round)')
+    check(!(await page.isDisabled('[data-testid="saa-bid-input-B"]')), '(4) all bid inputs stay editable — no one-bid lockout on the fields')
+    await page.fill('[data-testid="saa-bid-input-B"]', '300')
+    await page.click('[data-testid="saa-submit"]')
+    await page.waitForSelector('[data-testid="saa-error"]', { timeout: 8000 })
+    check(/only one license/i.test((await txt(page, 'saa-error')) ?? ''), '(4) bidding two licenses at once is rejected at Submit (one bid/round)')
+    await page.fill('[data-testid="saa-bid-input-B"]', '') // clear B; the rest of α proceeds on A alone
 
     // (3) illegal bid below the minimum → server rejection inline
     await page.fill('[data-testid="saa-bid-input-A"]', '150')
@@ -163,6 +168,20 @@ async function main() {
     const you = await txt(page, 'saa-terminal-you')
     check(/License A/.test(you ?? '') && /400/.test(you ?? ''), `(7) caller's terminal outcome: won A, profit 400 ("${you}")`)
     await page.close()
+  }
+
+  // ── (F) live active-bidder count decrements the instant someone drops (pre-close) ──
+  section('(F) live active-bidder count — decrements on a mid-round drop, before the round closes')
+  {
+    const gid = 'ui-live-count'; await seedGroup(gid); await open(gid)
+    const iview = async () => (await callFn('getInstructorAuctionView', asDev(gid, {}))).result
+    const bview = async (pid) => (await callFn('getBidderView', asStudent(gid, pid, { group_id: 'g' }))).result
+    check((await iview()).groups[0].activeCount === 7, '(F) round opens with active count 7')
+    await dropAs(gid, 'p7') // one bidder drops MID-round; nobody else has acted, so the round stays open
+    const iv = await iview()
+    check(iv.groups[0].round === 1 && iv.groups[0].status === 'open', '(F) round is still open (drop did not close it) — so the count is a LIVE read')
+    check(iv.groups[0].activeCount === 6, '(F) instructor view: active count decremented 7→6 immediately (pre-close)')
+    check((await bview('p1')).activeCount === 6, '(F) bidder view: another bidder sees the live active count 6')
   }
 
   // ── (D) instructor: eBay-style start box on the dashboard + /live watch + force-out
@@ -300,7 +319,34 @@ async function main() {
     const roster = await dash.evaluate(() => document.querySelector('[data-testid="roster-table"]').textContent)
     check(roster.includes('$199'), '(E) dashboard Outcome column shows PROFIT ($199 for Farah)')
     check(roster.includes('Profit'), '(E) dashboard Outcome header relabeled to "Profit"')
+
+    // (task6) the Profit column sorts NUMERICALLY (not by the "$…" strings) and toggles asc/desc.
+    // Non-bidder rows (no profit) and $0 rows are handled: nulls pinned last, 0 sorts as 0.
+    const profitCol = async () => dash.evaluate(() => [...document.querySelectorAll('[data-testid="roster-table"] tbody tr')].map((r) => {
+      const tds = r.querySelectorAll('td'); const t = (tds[tds.length - 1].textContent || '').trim()
+      return t.startsWith('$') ? Number(t.replace(/[^0-9.]/g, '')) : null
+    }))
+    const profitHeader = dash.locator('[data-testid="roster-table"] thead th', { hasText: 'Profit' })
+    await profitHeader.click(); await dash.waitForTimeout(400)
+    const asc = await profitCol(); const ascN = asc.filter((v) => v !== null)
+    const ascOk = asc.slice(ascN.length).every((v) => v === null) && ascN.every((v, i) => i === 0 || ascN[i - 1] <= v)
+    check(ascOk, `(task6) Profit sorts ASCENDING numerically, nulls last [${asc.join(', ')}]`)
+    await profitHeader.click(); await dash.waitForTimeout(400)
+    const desc = await profitCol(); const descN = desc.filter((v) => v !== null)
+    const descOk = desc.slice(descN.length).every((v) => v === null) && descN.every((v, i) => i === 0 || descN[i - 1] >= v)
+    check(descOk, `(task6) Profit sorts DESCENDING numerically, nulls last [${desc.join(', ')}]`)
     await dash.close()
+
+    // (task3) /live shows each bidder's TERMINAL state once the auction ended — never a stale "still deciding".
+    const liveEnded = await ctx.newPage()
+    await liveEnded.goto(`${FE}/live?_dev_game_instance_id=${gid}&_session=tab`)
+    await liveEnded.waitForSelector('[data-testid="saa-dash-group-g"]', { timeout: 25000 })
+    await liveEnded.waitForFunction(() => document.querySelector('[data-testid="saa-dash-status"]')?.textContent?.trim() === 'ended', null, { timeout: 12000 })
+    const endedBody = await liveEnded.evaluate(() => document.querySelector('[data-testid="saa-live-dashboard"]').innerText)
+    check(!/still deciding/i.test(endedBody), '(task3) ended auction: NO bidder shows "still deciding"')
+    check(/License [A-E] won/.test(endedBody), '(task3) a winner shows "License X won" in the round column')
+    check(await txt(liveEnded, 'saa-dash-acted-1') === 'dropped out', '(task3) a dropped-out bidder (Ada) shows "dropped out"')
+    await liveEnded.close()
   }
 
   await browser.close()

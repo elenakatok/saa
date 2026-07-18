@@ -35,14 +35,20 @@ interface Props {
   yLabel: string
   yFormat?: (n: number) => string
   testId?: string
+  /** Optional Y-axis ceiling. When given (and it clears the data), the axis tops out
+   *  here instead of niceMax-rounding the data up. Used to scale the revenue chart to
+   *  the efficient-max benchmark rather than overshooting far above the data. Ignored
+   *  if the data would exceed it, so a line never clips. */
+  axisMax?: number
 }
 
-export default function LineChartSVG({ series, xLabel, yLabel, yFormat = (n) => String(n), testId }: Props) {
+export default function LineChartSVG({ series, xLabel, yLabel, yFormat = (n) => String(n), testId, axisMax }: Props) {
   const withData = series.filter((s) => s.points.length > 0)
   const allY = withData.flatMap((s) => s.points.map((p) => p.y))
   const allX = withData.flatMap((s) => s.points.map((p) => p.x))
   const maxX = Math.max(1, ...allX)
-  const maxY = niceMax(Math.max(1, ...allY))
+  const dataMaxY = Math.max(1, ...allY)
+  const maxY = axisMax != null && axisMax >= dataMaxY ? axisMax : niceMax(dataMaxY)
   const minY = Math.min(0, ...allY)
 
   const xOf = (x: number) => PAD.left + (maxX <= 1 ? 0.5 : (x - 1) / (maxX - 1)) * PLOT_W

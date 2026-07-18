@@ -28,22 +28,17 @@ const bidderLabel = (idx: number | null, you: number) =>
 export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onRefresh, headerLinks }: Props) {
   const ended = view.status === 'ended'
   const winning = view.winningLicense
-  // A winner is locked to raising/holding their own license; a non-winner may pick any one.
-  const [selected, setSelected] = useState<LicenseId | null>(winning)
   const [amounts, setAmounts] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [confirmingDrop, setConfirmingDrop] = useState(false)
 
-  // On each new round / view, pre-fill the winner's own row with their standing bid
-  // and lock selection to it; a non-winner starts with no selection.
+  // On each new round / view, reset the bid boxes: pre-fill the winner's own row with
+  // their standing bid (ready to hold or raise), and clear everything for a non-winner.
+  // Resetting per round keeps the one-license rule — enforced at Submit by counting how
+  // many boxes carry an amount — from being tripped by a stale value left in another box.
   useEffect(() => {
-    if (winning) {
-      setSelected(winning)
-      setAmounts((a) => ({ ...a, [winning]: String(view.currentBidOnWinningLicense ?? '') }))
-    } else {
-      setSelected(null)
-    }
+    setAmounts(winning ? { [winning]: String(view.currentBidOnWinningLicense ?? '') } : {})
     setError(null)
     setConfirmingDrop(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -54,12 +49,6 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
     () => Object.fromEntries(view.licenses.map((l) => [l.licenseId, l])),
     [view.licenses],
   )
-
-  function pick(l: LicenseId) {
-    if (!canAct || winning) return // winner can't switch licenses
-    setSelected(l)
-    setError(null)
-  }
 
   async function run(fn: () => Promise<ActionResult>) {
     setSubmitting(true)
@@ -77,17 +66,19 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
 
   function onSubmit() {
     if (!canAct) return
-    if (selected === null) { setError('Select one license to bid on.'); return }
-    const raw = amounts[selected]
-    const amount = Number(raw)
-    if (raw === undefined || raw === '' || !Number.isFinite(amount)) {
-      setError('Enter a bid amount.'); return
-    }
+    // The one-license-per-round rule is enforced HERE, at Submit — never by disabling
+    // inputs. Count the boxes that carry an amount: exactly one must.
+    const filled = view.licenses.filter((l) => (amounts[l.licenseId] ?? '').trim() !== '')
+    if (filled.length === 0) { setError('Enter a bid amount on the one license you want.'); return }
+    if (filled.length > 1) { setError('You may bid on only one license per round — clear the amounts on the others.'); return }
+    const license = filled[0].licenseId
+    const amount = Number((amounts[license] ?? '').trim())
+    if (!Number.isFinite(amount)) { setError('Enter a valid bid amount.'); return }
     // Winner: submitting their unchanged standing bid is a HOLD; a higher value is a raise.
-    if (winning && selected === winning && amount === view.currentBidOnWinningLicense) {
+    if (winning && license === winning && amount === view.currentBidOnWinningLicense) {
       void run(onHold); return
     }
-    void run(() => onSubmitBid(selected, amount))
+    void run(() => onSubmitBid(license, amount))
   }
 
   // ── styles ──────────────────────────────────────────────────────────────────
@@ -131,10 +122,9 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
           </thead>
           <tbody>
             {view.licenses.map((row) => {
-              const isSel = selected === row.licenseId
-              // A row is bid-able only if the caller may bid on it this round.
-              const allowed = canAct && row.minLegalBidForYou !== null
-              const inputDisabled = !allowed || (winning ? row.licenseId !== winning : selected !== null && !isSel)
+              // Every bid input stays freely editable while the caller can act — the
+              // one-license rule is checked only at Submit, never by disabling inputs.
+              const showHint = canAct && row.minLegalBidForYou !== null
               return (
                 <tr key={row.licenseId} data-testid={`saa-row-${row.licenseId}`}>
                   <td style={td}><strong>{row.licenseId}</strong></td>
@@ -149,14 +139,12 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
                           type="number"
                           inputMode="numeric"
                           data-testid={`saa-bid-input-${row.licenseId}`}
-                          style={{ ...input, opacity: inputDisabled ? 0.4 : 1 }}
-                          disabled={inputDisabled}
+                          style={input}
                           placeholder={row.minLegalBidForYou !== null ? String(row.minLegalBidForYou) : ''}
                           value={amounts[row.licenseId] ?? ''}
-                          onFocus={() => pick(row.licenseId)}
-                          onChange={(e) => { pick(row.licenseId); setAmounts((a) => ({ ...a, [row.licenseId]: e.target.value })) }}
+                          onChange={(e) => setAmounts((a) => ({ ...a, [row.licenseId]: e.target.value }))}
                         />
-                        {allowed && row.minLegalBidForYou !== null && (
+                        {showHint && (
                           <div style={{ fontSize: typography.sizeXs, color: colors.textMuted }}>
                             {winning && row.licenseId === winning ? `Hold at ${view.currentBidOnWinningLicense}, or raise` : `Enter ${row.minLegalBidForYou} or more`}
                           </div>
@@ -213,7 +201,7 @@ export default function BidderScreen({ view, onSubmitBid, onHold, onDropOut, onR
           </section>
         ) : (
           <section style={{ display: 'flex', alignItems: 'center', gap: spacing.gapBtn }}>
-            <button data-testid="saa-submit" style={btn(colors.roleA, canAct && selected !== null && !submitting)} disabled={!canAct || selected === null || submitting} onClick={onSubmit}>
+            <button data-testid="saa-submit" style={btn(colors.roleA, canAct && !submitting)} disabled={!canAct || submitting} onClick={onSubmit}>
               Submit
             </button>
             {view.isWinner ? (

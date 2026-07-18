@@ -40,6 +40,18 @@ const CORS = { cors: saaGameDef.corsOrigins }
 /** Efficiency denominator default — the efficient-allocation max surplus (§ report). */
 const DEFAULT_EFFICIENT_MAX = 3119
 
+// LIVE active-bidder count: `state.activeBidders` only sheds a drop-out at round CLOSE
+// (see roundLoop.closeRound), so mid-round it still counts a bidder who has already
+// dropped out or been forced out this round. Subtract those pending exits so every
+// header (bidder screen + instructor dashboard) decrements the instant someone leaves,
+// matching what closeRound will commit. Mirrors closeRound's droppedThisRound test.
+function liveActiveCount(state: RoundLoopState): number {
+  return state.activeBidders.filter((b) => {
+    const t = state.actions[b]?.type
+    return t !== 'dropout' && t !== 'forced_out'
+  }).length
+}
+
 function stateDoc(gameInstanceId: string, groupId: string) {
   return admin.firestore().collection('game_instances').doc(gameInstanceId).collection('saa_auction').doc(groupId)
 }
@@ -251,7 +263,7 @@ export const getBidderView = onCall(CORS, async (request) => {
     currentBidOnWinningLicense: winningLicense ? state.standing[winningLicense].standingPrice : null,
     provisionalProfit: provisionalProfit(bidderIndex, state.standing),
     licenses,
-    activeCount: state.activeBidders.length,
+    activeCount: liveActiveCount(state), // live — decrements on a mid-round drop/force-out
     actedCount: Object.keys(state.actions).length, // COUNT only — never others' amounts
     terminalAllocation: state.status === 'ended' ? state.terminalAllocation : null,
     yourTerminalLicense: state.status === 'ended' ? winningLicense : null,
@@ -451,7 +463,7 @@ export const getInstructorAuctionView = onCall(CORS, async (request) => {
       groupId: stored.group_id,
       round: state.round,
       status: state.status,
-      activeCount: state.activeBidders.length,
+      activeCount: liveActiveCount(state), // live — decrements on a mid-round drop/force-out
       actedCount: Object.keys(state.actions).length,
       cumulativeDropouts: state.cumulativeDropouts,
       standing,
