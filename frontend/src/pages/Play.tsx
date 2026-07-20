@@ -12,20 +12,24 @@ import {
   PrepQuestions,
   GameHeader,
   WaitingRoom,
-  GroupReveal,
-  OffPlatformHolding,
-  Results,
   typography,
   colors,
   layout,
   spacing,
 } from '@mygames/game-ui'
 import type { BootstrapArgs, InfoPageLink } from '@mygames/game-ui'
-import OutcomeReporting from '../phases/OutcomeReporting'
-import { saaConfig, saaSchema, FIELD_LABELS, formatField } from '../gameConfig'
 
 // ── Phase state ───────────────────────────────────────────────────────────────
 
+// SAA is a self-resolving AUCTION — there is NO negotiation, no group reveal, no
+// off-platform holding, no lead outcome report, no confirmation handshake, no
+// deadlock. Once a student is matched they wait in the auction room; the live-auction
+// overlay (useSaaAuction → BidderScreen) takes over the screen the moment the
+// instructor opens the auction and stays through the terminal result. So the phase
+// machine ends at 'matched' — everything after is the overlay.
+//
+// PRIVACY: bidders are identified ONLY by bidder NUMBER. No student-facing screen or
+// student-authed payload carries a name (getBidderView returns bidderIndex only).
 type GamePhase =
   | { name: 'loading' }
   | { name: 'error';           message: string }
@@ -36,10 +40,7 @@ type GamePhase =
   | { name: 'confirmation' }
   | { name: 'attendance-code' }
   | { name: 'waiting-room' }
-  | { name: 'group-reveal';    groupId: string }
-  | { name: 'off-platform';    groupId: string }
-  | { name: 'outcome-reporting'; groupId: string; isLead: boolean }
-  | { name: 'results';         groupId: string }
+  | { name: 'matched';         groupId: string }
 
 // ── Phase routing ─────────────────────────────────────────────────────────────
 
@@ -73,54 +74,11 @@ async function routeToPhase(participantId: string, gameInstanceId: string): Prom
   if (!d.attendance_confirmed_at) return { name: 'confirmation' }
   if (!d.group_id)              return { name: 'waiting-room' }
 
-  const groupId = d.group_id as string
-  const groupSnap = await getDoc(
-    doc(db, 'game_instances', gameInstanceId, 'groups', groupId),
-  )
-  const g = groupSnap.data() ?? {}
-  const status = g['status'] as string | undefined
-
-  if (status === 'matched')    return { name: 'group-reveal', groupId }
-  if (status === 'negotiating') return { name: 'off-platform', groupId }
-  if (status === 'reporting' || status === 'deadlocked') {
-    return { name: 'outcome-reporting', groupId, isLead: d.is_lead === true }
-  }
-  if (status === 'completed')  return { name: 'results', groupId }
-
-  return { name: 'waiting-room' }
-}
-
-// ── SAA outcome formatter (single role; placeholder schema) ───────────────────
-
-function formatSaaOutcome(
-  outcome: Record<string, unknown> | null,
-  agreementReached: boolean,
-): React.ReactNode {
-  if (!agreementReached || outcome == null) {
-    return (
-      <p style={{ fontSize: '1.05rem', color: colors.textSecondary, marginBottom: layout.pagePad }}>
-        No result recorded.
-      </p>
-    )
-  }
-  return (
-    <div style={{
-      background:   '#fdf4e7',
-      border:       '1px solid #f0d9b5',
-      borderRadius: '4px',
-      padding:      '0.75rem 1rem',
-      marginBottom: layout.pagePad,
-    }}>
-      {saaSchema.map(field => (
-        <div key={field.key} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.2rem 0' }}>
-          <span style={{ color: colors.textSecondary, marginRight: '1rem' }}>
-            {FIELD_LABELS[field.key] ?? field.key}
-          </span>
-          <span>{formatField(field, outcome[field.key])}</span>
-        </div>
-      ))}
-    </div>
-  )
+  // Matched. The auction overlay (useSaaAuction) owns bidding + the terminal result
+  // from here — it renders ON TOP of this phase the instant getBidderView answers.
+  // Until then, 'matched' is the "waiting for the auction to start" room. There is NO
+  // group-status branch: no reveal, no 'negotiating'/'reporting'/'deadlocked'/'completed'.
+  return { name: 'matched', groupId: d.group_id as string }
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -186,11 +144,11 @@ export default function Play() {
   }, [session])
 
   // ── Live auction overlay (Slice 4) ────────────────────────────────────────
-  // Once the group has a groupId (post-match), poll getBidderView; when the SAA
-  // auction is open/ended it renders BidderScreen ON TOP of the phase machine
-  // (eBay overlay pattern), so the auction takes over the moment the instructor
-  // opens it. Hook is unconditional (idles while groupId is null).
-  const auctionGroupId = 'groupId' in phase ? phase.groupId : null
+  // Once the student is matched, poll getBidderView; when the SAA auction is
+  // open/ended it renders BidderScreen ON TOP of the phase machine (eBay overlay
+  // pattern), so the auction takes over the moment the instructor opens it. Hook is
+  // unconditional (idles while groupId is null).
+  const auctionGroupId = phase.name === 'matched' ? phase.groupId : null
   const auction = useSaaAuction(auctionGroupId)
 
   // ── Render: pre-session states (no header) ────────────────────────────────
@@ -396,55 +354,23 @@ export default function Play() {
           gameInstanceId={gameInstanceId}
           db={db}
           rtdb={rtdb}
-          onMatched={(groupId) => setPhase({ name: 'group-reveal', groupId })}
+          onMatched={(groupId) => setPhase({ name: 'matched', groupId })}
         />
       )}
 
-      {phase.name === 'group-reveal' && (
-        <GroupReveal
-          groupId={phase.groupId}
-          participantId={participantId}
-          gameInstanceId={gameInstanceId}
-          roleConfig={saaConfig}
-          db={db}
-          rtdb={rtdb}
-          functions={functions}
-          onContinue={() => setPhase({ name: 'off-platform', groupId: phase.groupId })}
-        />
-      )}
-
-      {phase.name === 'off-platform' && (
-        <OffPlatformHolding
-          groupId={phase.groupId}
-          participantId={participantId}
-          gameInstanceId={gameInstanceId}
-          db={db}
-          onReportOutcome={(isLead) => setPhase({ name: 'outcome-reporting', groupId: phase.groupId, isLead })}
-        />
-      )}
-
-      {phase.name === 'outcome-reporting' && (
-        <OutcomeReporting
-          groupId={phase.groupId}
-          participantId={participantId}
-          gameInstanceId={gameInstanceId}
-          isLead={phase.isLead}
-          args={{}}
-          onComplete={() => setPhase({ name: 'results', groupId: phase.groupId })}
-        />
-      )}
-
-      {phase.name === 'results' && (
-        <Results
-          groupId={phase.groupId}
-          participantId={participantId}
-          gameInstanceId={gameInstanceId}
-          roleConfig={saaConfig}
-          formatOutcome={formatSaaOutcome}
-          db={db}
-          rtdb={rtdb}
-          functions={functions}
-        />
+      {phase.name === 'matched' && (
+        <main data-testid="auction-room" style={{ padding: layout.pagePad, maxWidth: layout.contentWidth, margin: '0 auto' }}>
+          <h1 style={{ marginTop: 0 }}>You&apos;re in the auction room</h1>
+          <p style={{ lineHeight: 1.6, marginBottom: spacing.gapSm }}>
+            You&apos;ve been placed in an auction with six other bidders. The bidding will
+            begin the moment your instructor starts it — stay on this page and it will
+            open automatically.
+          </p>
+          <p style={{ color: colors.textSecondary }}>
+            Keep this tab open. When the auction opens you&apos;ll see the five licenses,
+            your own private values, and be able to bid.
+          </p>
+        </main>
       )}
     </div>
   )

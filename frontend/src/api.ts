@@ -60,14 +60,11 @@ export const confirmReady = (args: CallArgs) =>
 export const verifyAttendanceCode = (args: CallArgs, code: string) =>
   callFn<{ ok: boolean }>('verifyAttendanceCode', { ...args, code })
 
-export const startNegotiation = (args: CallArgs) =>
-  callFn<{ ok: boolean }>('startNegotiation', args)
-
-export const submitLeadOutcome = (args: CallArgs, outcome: OutcomeFields | null) =>
-  callFn<{ ok: boolean }>('submitLeadOutcome', { ...args, outcome })
-
-export const submitConfirmation = (args: CallArgs, confirmed: boolean) =>
-  callFn<{ ok: boolean; outcome: string }>('submitConfirmation', { ...args, confirmed })
+// NOTE: the generic negotiation callables (startNegotiation / submitLeadOutcome /
+// submitConfirmation) are deliberately NOT wrapped here. SAA is a self-resolving
+// auction — the student path never negotiates, never reports a lead outcome, and
+// never confirms one. The server still exports them (shared factories) but no
+// student-facing screen calls them.
 
 // ── Student content callables ─────────────────────────────────────────────────
 // The shared @mygames/game-ui components (InfoPage/KnowledgeCheck/PrepQuestions,
