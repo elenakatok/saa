@@ -27,9 +27,11 @@ import {
   type RoundAction,
 } from './auction/roundLoop'
 import { LICENSE_IDS, valueFor, type LicenseId } from './auction/valueMatrix'
-import { minIncrement } from './auction/increment'
 import { provisionalProfit } from './auction/resolution'
-import { winningLicenseOf, minToTake } from './auction/validateBid'
+import { winningLicenseOf } from './auction/validateBid'
+import { buildBidderView } from './auction/bidderView'
+import { enqueueBotTask } from './botTasks'
+import { decide, type BidderView as BotView } from './bot/strategy'
 
 const isEmu = () => process.env.FUNCTIONS_EMULATOR === 'true'
 const authHeaderOf = (req: CallableRequest): string | undefined =>
@@ -61,6 +63,27 @@ interface StoredDoc {
   group_id: string
   pid_by_index: Record<string, string>
   index_by_pid: Record<string, number>
+  /** bidderIndices that are server-side bots (no browser/auth) — [] for all-human groups. */
+  bot_indices?: number[]
+  /** When the CURRENT open round started — the bot resolve-on-read backstop's overdue clock. */
+  round_opened_at?: FirebaseFirestore.Timestamp
+}
+
+/**
+ * The full stored-doc payload for a wholesale (no-merge) write. Every write REPLACES the
+ * doc, so bot_indices + round_opened_at must be carried on every set or they'd be dropped.
+ * `advanced` (a round just opened) stamps a fresh round_opened_at for the backstop clock.
+ */
+function storedPayload(stored: StoredDoc, newState: RoundLoopState, advanced: boolean) {
+  return {
+    state: newState,
+    group_id: stored.group_id,
+    pid_by_index: stored.pid_by_index,
+    index_by_pid: stored.index_by_pid,
+    bot_indices: stored.bot_indices ?? [],
+    round_opened_at: advanced ? FieldValue.serverTimestamp() : (stored.round_opened_at ?? FieldValue.serverTimestamp()),
+    updated_at: FieldValue.serverTimestamp(),
+  }
 }
 
 // ── openAuction (instructor): initialize round 1 for a group of bidders ─────────
@@ -75,13 +98,19 @@ export const openAuction = onCall(CORS, async (request) => {
   if (!groupSnap.exists) throw new HttpsError('not-found', 'Group not found.')
   const bidderPids = (groupSnap.data()?.['bidder_participants'] as string[] | undefined) ?? []
   if (bidderPids.length === 0) throw new HttpsError('failed-precondition', 'Group has no bidders.')
+  // Which seats are bots (server-filled remainder group)? By pid — the bot-fill matcher
+  // records them on the group. bidderIndex is assigned below by array order, so a bot's
+  // index falls out of its position exactly like a human's.
+  const botPids = new Set((groupSnap.data()?.['bot_participants'] as string[] | undefined) ?? [])
 
   // Assign bidderIndex 1..N by the group's bidder order (feeds the value matrix).
   const pidByIndex: Record<string, string> = {}
   const indexByPid: Record<string, number> = {}
+  const botIndices: number[] = []
   bidderPids.forEach((pid, i) => {
     pidByIndex[String(i + 1)] = pid
     indexByPid[pid] = i + 1
+    if (botPids.has(pid)) botIndices.push(i + 1)
   })
 
   const state = openState(bidderPids.map((_, i) => i + 1))
@@ -90,12 +119,133 @@ export const openAuction = onCall(CORS, async (request) => {
     group_id: groupId,
     pid_by_index: pidByIndex,
     index_by_pid: indexByPid,
+    bot_indices: botIndices,
+    round_opened_at: FieldValue.serverTimestamp(),
     updated_at: FieldValue.serverTimestamp(),
   })
+  // Schedule the first bot pass (round 1). Best-effort — no-op for all-human groups, and
+  // the emulator (no Cloud Tasks) relies on the test trigger / backstop instead.
+  if (botIndices.length > 0) await enqueueBotTask(gameInstanceId, groupId, state.round)
   return { ok: true as const, round: state.round, activeBidders: state.activeBidders }
 })
 
-// ── shared student-action transaction ───────────────────────────────────────────
+// ── the auth-free action core (shared by the human callables AND the bot runner) ──
+// AUTH-FREE by design: the caller has ALREADY established WHO is acting (a human
+// callable via extractStudentOnCallIds; the bot runner via a trusted bot pid). This is
+// the exact read→applyAction→write transaction the human path always used — lifted so a
+// Cloud Function can write a bot's bid through the SAME logic WITHOUT faking an HTTP
+// request. The human bid path is behaviourally identical; buildAction may return null
+// (bot only — decide() said "no move"), in which case NOTHING is written.
+export async function applyBidderAction(
+  gameInstanceId: string,
+  groupId: string,
+  participantId: string,
+  buildAction: (bidderIndex: number, state: RoundLoopState) => RoundAction | null,
+) {
+  const db = admin.firestore()
+  const ref = stateDoc(gameInstanceId, groupId)
+  const outcome = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref)
+    if (!snap.exists) throw new HttpsError('not-found', 'Auction not started.')
+    const stored = snap.data() as StoredDoc
+    const bidderIndex = stored.index_by_pid[participantId]
+    if (bidderIndex === undefined) throw new HttpsError('permission-denied', 'You are not a bidder in this auction.')
+
+    const action = buildAction(bidderIndex, stored.state)
+    // Bot "no move" (already acted / not its turn) → idempotent no-op, never a write.
+    if (action === null) return { ok: true as const, skipped: true, roundClosed: false, status: stored.state.status, round: stored.state.round, advanced: false, hasBots: (stored.bot_indices ?? []).length > 0 }
+
+    const result = applyAction(stored.state, bidderIndex, action)
+    if (!result.ok) {
+      // No write on an illegal action — return the actor-facing reason.
+      return { ok: false as const, reason: result.reason, minimumRequired: result.minimumRequired }
+    }
+    const advanced = result.roundClosed && result.state.status === 'open'
+    tx.set(ref, storedPayload(stored, result.state, advanced))
+    if (result.state.status === 'ended') {
+      writeEndOutcomes(tx, admin.firestore().collection('game_instances').doc(gameInstanceId), stored, result.state)
+    }
+    return {
+      ok: true as const,
+      skipped: false,
+      roundClosed: result.roundClosed,
+      status: result.state.status,
+      round: result.state.round,
+      advanced,
+      hasBots: (stored.bot_indices ?? []).length > 0,
+    }
+  })
+
+  // Post-commit: a new round just opened in a group that has bots → schedule the next
+  // bot pass (idempotent; deduped by round). Best-effort; the backstop covers a failure.
+  if (outcome.ok && !outcome.skipped && outcome.advanced && outcome.hasBots) {
+    await enqueueBotTask(gameInstanceId, groupId, outcome.round)
+  }
+  return outcome
+}
+
+// ── THE BOT RUNNER core (server seat-filler) ─────────────────────────────────────
+// For each bot seat in a group: build its view (the SAME projection humans get), run
+// the SAME decide() the browser bots use, and — if it has a move — write the action
+// through applyBidderAction (the same engine humans hit). Each bot acts in its own
+// transaction, so a duplicate delivery (a Cloud Task retry) re-reads and applyAction
+// rejects "already acted" → a no-op, never a double-bid. IDEMPOTENT by construction.
+export async function runBotActions(gameInstanceId: string, groupId: string) {
+  const snap = await stateDoc(gameInstanceId, groupId).get()
+  if (!snap.exists) return { acted: 0, skipped: 0, roundClosed: false, status: 'not_found', round: 0 }
+  const stored = snap.data() as StoredDoc
+  const botIndices = stored.bot_indices ?? []
+  if (stored.state.status !== 'open' || botIndices.length === 0) {
+    return { acted: 0, skipped: 0, roundClosed: false, status: stored.state.status, round: stored.state.round }
+  }
+
+  let acted = 0
+  let skipped = 0
+  let roundClosed = false
+  let round = stored.state.round
+  let status: string = stored.state.status
+  for (const idx of botIndices) {
+    const pid = stored.pid_by_index[String(idx)]
+    if (!pid) { skipped++; continue }
+    const r = await applyBidderAction(gameInstanceId, groupId, pid, (bidderIndex, state) => {
+      const decision = decide(buildBidderView(state, bidderIndex) as BotView)
+      if (decision === null) return null                                     // no move → no-op
+      if (decision.action === 'hold') return { type: 'hold' }
+      if (decision.action === 'drop') return { type: 'dropout' }
+      return { type: 'bid', licenseId: decision.license, amount: decision.amount, atMs: Timestamp.now().toMillis() }
+    })
+    if (r.ok && !r.skipped) {
+      acted++
+      round = r.round
+      status = r.status
+      roundClosed = roundClosed || r.roundClosed
+    } else {
+      skipped++ // already acted this round (idempotent), illegal, or "no move"
+    }
+  }
+  return { acted, skipped, roundClosed, status, round }
+}
+
+// ── resolve-on-read BACKSTOP (Spectrum pattern) ──────────────────────────────────
+// If a bot pass is overdue (the Cloud Task never fired) AND some bot still hasn't acted
+// this round, run the bots now. Gated on round_opened_at so it does NOT defeat the
+// 30–60s plausible-pacing delay — it only rescues a genuinely stuck round.
+const BOT_BACKSTOP_MS = 75_000
+async function backstopBots(
+  gameInstanceId: string,
+  groupId: string,
+  roundOpenedAtMs: number | null,
+  state: RoundLoopState,
+  botIndices: number[],
+): Promise<void> {
+  if (state.status !== 'open' || botIndices.length === 0 || roundOpenedAtMs === null) return
+  if (Date.now() - roundOpenedAtMs < BOT_BACKSTOP_MS) return
+  const anyPending = botIndices.some((i) => state.activeAtRoundStart.includes(i) && state.actions[i] === undefined)
+  if (!anyPending) return
+  await runBotActions(gameInstanceId, groupId)
+}
+
+// ── shared student-action wrapper: auth, then the auth-free core ─────────────────
 async function applyStudentAction(
   request: CallableRequest,
   buildAction: (bidderIndex: number, state: RoundLoopState) => RoundAction,
@@ -104,38 +254,10 @@ async function applyStudentAction(
   const { participantId, gameInstanceId } = await extractStudentOnCallIds(data, isEmu(), authHeaderOf(request))
   const groupId = String(data['group_id'] ?? '')
   if (!groupId) throw new HttpsError('invalid-argument', 'group_id required')
-
-  const db = admin.firestore()
-  const ref = stateDoc(gameInstanceId, groupId)
-  return await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref)
-    if (!snap.exists) throw new HttpsError('not-found', 'Auction not started.')
-    const stored = snap.data() as StoredDoc
-    const bidderIndex = stored.index_by_pid[participantId]
-    if (bidderIndex === undefined) throw new HttpsError('permission-denied', 'You are not a bidder in this auction.')
-
-    const result = applyAction(stored.state, bidderIndex, buildAction(bidderIndex, stored.state))
-    if (!result.ok) {
-      // No write on an illegal action — return the student-facing reason.
-      return { ok: false as const, reason: result.reason, minimumRequired: result.minimumRequired }
-    }
-    tx.set(ref, {
-      state: result.state,
-      group_id: stored.group_id,
-      pid_by_index: stored.pid_by_index,
-      index_by_pid: stored.index_by_pid,
-      updated_at: FieldValue.serverTimestamp(),
-    })
-    if (result.state.status === 'ended') {
-      writeEndOutcomes(tx, admin.firestore().collection('game_instances').doc(gameInstanceId), stored, result.state)
-    }
-    return {
-      ok: true as const,
-      roundClosed: result.roundClosed,
-      status: result.state.status,
-      round: result.state.round,
-    }
-  })
+  const r = await applyBidderAction(gameInstanceId, groupId, participantId, buildAction)
+  // Preserve the exact public shape the callables returned before the refactor.
+  if (!r.ok) return { ok: false as const, reason: r.reason, minimumRequired: r.minimumRequired }
+  return { ok: true as const, roundClosed: r.roundClosed, status: r.status, round: r.round }
 }
 
 // ── submitBid (student): a validated bid (non-winner take OR winner self-raise) ──
@@ -170,7 +292,7 @@ export const forceOut = onCall(CORS, async (request) => {
 
   const db = admin.firestore()
   const ref = stateDoc(gameInstanceId, groupId)
-  return await db.runTransaction(async (tx) => {
+  const outcome = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref)
     if (!snap.exists) throw new HttpsError('not-found', 'Auction not started.')
     const stored = snap.data() as StoredDoc
@@ -187,18 +309,16 @@ export const forceOut = onCall(CORS, async (request) => {
     if (!result.ok) {
       throw new HttpsError('failed-precondition', result.reason ?? 'Cannot force out this bidder.')
     }
-    tx.set(ref, {
-      state: result.state,
-      group_id: stored.group_id,
-      pid_by_index: stored.pid_by_index,
-      index_by_pid: stored.index_by_pid,
-      updated_at: FieldValue.serverTimestamp(),
-    })
+    const advanced = result.roundClosed && result.state.status === 'open'
+    tx.set(ref, storedPayload(stored, result.state, advanced))
     if (result.state.status === 'ended') {
       writeEndOutcomes(tx, admin.firestore().collection('game_instances').doc(gameInstanceId), stored, result.state)
     }
-    return { ok: true as const, roundClosed: result.roundClosed, status: result.state.status, round: result.state.round }
+    return { ok: true as const, roundClosed: result.roundClosed, status: result.state.status, round: result.state.round, advanced, hasBots: (stored.bot_indices ?? []).length > 0 }
   })
+  // A force-out is the round unblocker — if it opened a new round in a bot group, nudge bots.
+  if (outcome.advanced && outcome.hasBots) await enqueueBotTask(gameInstanceId, groupId, outcome.round)
+  return { ok: outcome.ok, roundClosed: outcome.roundClosed, status: outcome.status, round: outcome.round }
 })
 
 // ── getBidderView (student): the PARANOID §12 per-caller view for the screen ─────
@@ -218,51 +338,15 @@ export const getBidderView = onCall(CORS, async (request) => {
   const bidderIndex = stored.index_by_pid[participantId]
   if (bidderIndex === undefined) throw new HttpsError('permission-denied', 'You are not a bidder in this auction.')
 
-  const winningLicense = winningLicenseOf(bidderIndex, state.standing)
-  const myAction = state.actions[bidderIndex]
-  // A drop-out (or force-out) is permanent the instant it is submitted — reflect watch
-  // mode immediately, even though activeBidders/droppedBidders only update at round close.
-  const droppedOut =
-    state.droppedBidders.includes(bidderIndex) || myAction?.type === 'dropout' || myAction?.type === 'forced_out'
-  const active = state.activeBidders.includes(bidderIndex) && !droppedOut
-  const isOpen = state.status === 'open'
-  const hasActedThisRound = myAction !== undefined
-
-  const licenses = LICENSE_IDS.map((l) => {
-    const s = state.standing[l]
-    // The minimum LEGAL bid for THIS caller on THIS license (server-authoritative hint):
-    //   • non-winner → Case-A minToTake (200 if unheld, else standing+increment)
-    //   • the caller's own held license → self-raise, standing+1
-    //   • a winner on ANY other license → null (cannot switch)
-    let minLegalBidForYou: number | null = null
-    if (isOpen && active && !hasActedThisRound) {
-      if (winningLicense === null) minLegalBidForYou = minToTake(l, state.standing)
-      else if (l === winningLicense) minLegalBidForYou = s.standingPrice + 1
-    }
-    return {
-      licenseId: l,
-      yourValue: valueFor(l, bidderIndex), // caller's OWN column only — private
-      currentHighBid: s.standingPrice,
-      currentWinnerIndex: s.winnerBidderIndex,
-      youAreWinner: s.winnerBidderIndex === bidderIndex,
-      minIncrement: minIncrement(s.standingPrice), // per-license band (display)
-      minLegalBidForYou,
-    }
-  })
+  // Core per-seat projection (shared verbatim with the bot runner). The wire response
+  // adds the count-based + terminal fields the screen needs on top of it.
+  const core = buildBidderView(state, bidderIndex)
+  const winningLicense = core.winningLicense
 
   return {
     ok: true as const,
-    status: state.status,
-    round: state.round,
-    bidderIndex,
-    active,
-    droppedOut,
-    hasActedThisRound,
-    isWinner: winningLicense !== null,
-    winningLicense,
-    currentBidOnWinningLicense: winningLicense ? state.standing[winningLicense].standingPrice : null,
+    ...core,
     provisionalProfit: provisionalProfit(bidderIndex, state.standing),
-    licenses,
     activeCount: liveActiveCount(state), // live — decrements on a mid-round drop/force-out
     actedCount: Object.keys(state.actions).length, // COUNT only — never others' amounts
     terminalAllocation: state.status === 'ended' ? state.terminalAllocation : null,
@@ -472,6 +556,14 @@ export const getInstructorAuctionView = onCall(CORS, async (request) => {
     }
   })
 
+  // Resolve-on-read backstop: the instructor dashboard polls this every ~2s, so it is a
+  // reliable place to rescue a bot pass whose Cloud Task never fired. Fire-and-await; the
+  // freshly-acted state surfaces on the next poll (no re-read this call).
+  await Promise.all(auctionsSnap.docs.map(async (doc) => {
+    const s = doc.data() as StoredDoc
+    await backstopBots(gameInstanceId, s.group_id, s.round_opened_at?.toMillis?.() ?? null, s.state, s.bot_indices ?? [])
+  }))
+
   return { ok: true as const, groups }
 })
 
@@ -489,6 +581,7 @@ export const getAuctionState = onCall(CORS, async (request) => {
     ok: true as const,
     state: stored.state,
     pidByIndex: stored.pid_by_index,
+    botIndices: stored.bot_indices ?? [],
     terminalBijectionOk: terminalBijectionOk(stored.state),
     provisionalProfits: provisionalProfits(stored.state),
   }

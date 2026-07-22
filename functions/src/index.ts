@@ -67,6 +67,14 @@ export { scoreAndRecord } from './scoreAndRecord'
 // (Slice 6) are not built yet.
 export { openAuction, submitBid, holdBid, dropOut, forceOut, getAuctionState, getBidderView, getInstructorAuctionView, getAuctionReport } from './saaAuction'
 
+// ── Phase 3: server-side bots (seat-filler for the non-multiple-of-7 remainder) ──
+// fillRemainderWithBots (instructor): forms the remainder group padded with is_bot seats.
+// runBotActionsTask (Cloud Task): the scheduled bot-action pass. runBotActionsForTest is
+// emulator-only (harness). The bot bid path reuses the human engine (applyBidderAction)
+// and the unchanged Slice-1 decide() strategy.
+export { fillRemainderWithBots } from './matchWithBots'
+export { runBotActionsTask, runBotActionsForTest } from './botRunner'
+
 // ── Non-game onRequest endpoints ────────────────────────────────────────────────
 
 const CORS_ORIGINS = new Set(['https://saa.mygames.live'])

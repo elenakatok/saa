@@ -96,9 +96,14 @@ export const scoreAndRecord = onCall({ cors: def.corsOrigins, secrets: [classroo
     ])
     const configData = (configSnap.data() ?? {}) as Record<string, unknown>
 
-    // First pass: ScoringRecord[] for role-bearing participants.
+    // First pass: ScoringRecord[] for role-bearing HUMAN participants. Server-side bots
+    // (is_bot:true) are EXCLUDED from the z-score pool AND from the gradebook push — they
+    // are seat-fillers, not students, and have no classroom identity to grade. (This is
+    // the ONLY scoring change for bots; human z-score math is untouched. The second pass
+    // skips them too: a bot's role is 'bidder' (valid), so it never hits the −2 floor.)
     const records: ScoringRecord[] = []
     for (const pdoc of participantsSnap.docs) {
+      if (pdoc.data()['is_bot'] === true) continue
       const record = buildScoringRecord(pdoc.id, pdoc.data() as Record<string, unknown>, completedGroups)
       if (record !== null) records.push(record)
     }
