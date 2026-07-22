@@ -1,5 +1,8 @@
 import type { Outcome, OutcomeSchema, RoleConfig } from '@mygames/game-engine'
 import type { GameDefinition, PrepTextQuestion } from '@mygames/game-server'
+// Latecomer placement (Latecomer_Placement_Spec_v1 §3.1) — SAA declares ONLY isJoinable
+// (predicate-only; NO onPlace — nothing is stamped per bidder at placement time).
+import { saaIsJoinable } from './latecomer'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SAA — Simultaneous Ascending Auction — SINGLE-ROLE game (Part 1: SKELETON).
@@ -126,6 +129,11 @@ export const saaGameDef: GameDefinition = {
   reservations: { bidder: 0 },
   corsOrigins: ['https://saa.mygames.live'],
   classroom: { callbackSecretId: 'saa_v1' },
+
+  // Latecomer auto-placement (spec §3.1): joinable while the auction has <7 bidders and
+  // has not opened. NO onPlace — the value column is derived at openAuction from array
+  // order, so placeLatecomer's membership add is the entire per-member setup.
+  isJoinable: saaIsJoinable,
 
   // Settings page config fields (ONE role — `bidder`). Real bidder case sheet is a
   // PLACEHOLDER PDF for Part 1; Elena supplies the real sheet in Phase 2.
