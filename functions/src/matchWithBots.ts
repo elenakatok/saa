@@ -19,20 +19,25 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { randomUUID } from 'crypto'
-import { onCall, HttpsError } from 'firebase-functions/v2/https'
+import { onCall, HttpsError, type CallableRequest } from 'firebase-functions/v2/https'
 import * as admin from 'firebase-admin'
 import { FieldValue } from 'firebase-admin/firestore'
-import { extractInstructorGameId } from '@mygames/game-server'
+import { extractInstructorGameId, makeTriggerMatching } from '@mygames/game-server'
 import { saaGameDef } from './gameDefinition'
 
 const GROUP_SIZE = 7 // spec §6 (fixed)
 
-export const fillRemainderWithBots = onCall({ cors: saaGameDef.corsOrigins }, async (request) => {
-  const data = request.data as Record<string, unknown>
-  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const authHeader = request.rawRequest.headers.authorization as string | undefined
-  const gameInstanceId = await extractInstructorGameId(data, isEmulator, authHeader)
+// The existing shared human matcher (unchanged) — PRIVATE: run in-process via .run(request)
+// inside the deployed `triggerMatching` below. It is deliberately NOT exported as its own
+// deployed function, so nothing can call the bare (remainder-stranding) matcher by name.
+const humanMatcher = makeTriggerMatching(saaGameDef)
 
+/**
+ * The bot-fill core (no auth, no HTTP): pad the ungrouped eligible-human remainder to a full
+ * group of 7 with server bots. Shared by the standalone fillRemainderWithBots callable AND
+ * the chained triggerMatchingWithBots. Idempotent — no ungrouped humans → a no-op.
+ */
+async function fillRemainderCore(gameInstanceId: string) {
   const db = admin.firestore()
   const instanceRef = db.collection('game_instances').doc(gameInstanceId)
 
@@ -131,4 +136,50 @@ export const fillRemainderWithBots = onCall({ cors: saaGameDef.corsOrigins }, as
     console.error('[fillRemainderWithBots] error:', err)
     throw new HttpsError('internal', 'Internal error')
   }
+}
+
+// ── Standalone bot-fill callable (unchanged surface; now a thin wrapper over the core) ──
+export const fillRemainderWithBots = onCall({ cors: saaGameDef.corsOrigins }, async (request) => {
+  const data = request.data as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const authHeader = request.rawRequest.headers.authorization as string | undefined
+  const gameInstanceId = await extractInstructorGameId(data, isEmulator, authHeader)
+  return fillRemainderCore(gameInstanceId)
+})
+
+// ── THE FIX: `triggerMatching` is the server-authoritative single matching action ──────
+// DEPLOYED UNDER THE NAME 'triggerMatching' on purpose: the instructor "Match" button is
+// the shared game-ui InstructorDashboard, which calls httpsCallable('triggerMatching') by
+// NAME (game-ui is not editable here) and ignores the return value. So the chained logic
+// must live under exactly that name. It runs the EXISTING human matcher (floor(n/7) full
+// groups of 7 — behaviour unchanged) THEN bot-fills the ungrouped remainder to 7.
+//
+// Idempotent: the human matcher returns existing groups on a re-run; fillRemainderCore
+// no-ops when nothing is ungrouped. If a genuine step fails, the whole call fails (no
+// half-matched state) — EXCEPT the n<7 "no full base group" case, which is expected: the
+// remainder matcher then forms the single (humans + bots) group on its own.
+export const triggerMatching = onCall({ cors: saaGameDef.corsOrigins }, async (request: CallableRequest) => {
+  const data = request.data as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const authHeader = request.rawRequest.headers.authorization as string | undefined
+  const gameInstanceId = await extractInstructorGameId(data, isEmulator, authHeader)
+
+  // 1. Human groups — EXACTLY today's path (the shared matcher's own handler, in-process).
+  let human: unknown
+  try {
+    human = await humanMatcher.run(request)
+  } catch (err) {
+    // n < 7 → the human matcher can't form a base group and throws failed-precondition.
+    // That is NOT an error here: every present human goes into the bot-filled remainder.
+    // Any OTHER failure is real → propagate (the whole match fails, no half state).
+    if (err instanceof HttpsError && err.code === 'failed-precondition') {
+      human = { ok: false as const, groups: [], note: 'no full human group; all humans join the bot-filled remainder' }
+    } else {
+      throw err
+    }
+  }
+  // 2. Pad the group_id==null remainder with bots (idempotent).
+  const remainder = await fillRemainderCore(gameInstanceId)
+
+  return { ok: true as const, human, remainder }
 })

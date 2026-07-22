@@ -198,8 +198,12 @@ export const generateAttendanceCode = () =>
 export const getRoster = () =>
   callFn<{ ok: boolean; participants: RosterParticipant[]; groups: RosterGroup[] }>('getRoster', {})
 
+// Matching = the server-authoritative single action: human groups THEN bot-fill the
+// remainder to 7 (fixes the stranded-remainder bug). The DEPLOYED 'triggerMatching'
+// function is now the chained matcher (see functions/src/matchWithBots.ts), so both this
+// call and the shared game-ui dashboard button ('triggerMatching' by name) get bot-fill.
 export const triggerMatching = () =>
-  callFn<{ ok: boolean; groups: unknown[]; alreadyMatched?: boolean }>('triggerMatching', {})
+  callFn<{ ok: boolean; human: { groups: unknown[]; alreadyMatched?: boolean }; remainder: { created: boolean; group_id?: string; humans?: number; bots?: number } }>('triggerMatching', {})
 
 export const submitInstructorOutcome = (groupId: string, outcome: OutcomeFields | null) =>
   callFn<{ ok: boolean }>('submitInstructorOutcome', { group_id: groupId, outcome })

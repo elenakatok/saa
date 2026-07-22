@@ -9,7 +9,6 @@ import {
   makeVerifyAttendanceCode,
   makeGetRoster,
   makeSyncRoster,
-  makeTriggerMatching,
   makeStartNegotiation,
   makeSubmitLeadOutcome,
   makeSubmitConfirmation,
@@ -44,7 +43,6 @@ export const generateAttendanceCode = makeGenerateAttendanceCode(saaGameDef)
 export const verifyAttendanceCode   = makeVerifyAttendanceCode(saaGameDef)
 export const getRoster              = makeGetRoster(saaGameDef)
 export const syncRoster             = makeSyncRoster(saaGameDef)
-export const triggerMatching            = makeTriggerMatching(saaGameDef)
 export const startNegotiation           = makeStartNegotiation(saaGameDef)
 export const submitLeadOutcome          = makeSubmitLeadOutcome(saaGameDef)
 export const submitConfirmation         = makeSubmitConfirmation(saaGameDef)
@@ -68,11 +66,13 @@ export { scoreAndRecord } from './scoreAndRecord'
 export { openAuction, submitBid, holdBid, dropOut, forceOut, getAuctionState, getBidderView, getInstructorAuctionView, getAuctionReport } from './saaAuction'
 
 // ── Phase 3: server-side bots (seat-filler for the non-multiple-of-7 remainder) ──
-// fillRemainderWithBots (instructor): forms the remainder group padded with is_bot seats.
-// runBotActionsTask (Cloud Task): the scheduled bot-action pass. runBotActionsForTest is
-// emulator-only (harness). The bot bid path reuses the human engine (applyBidderAction)
-// and the unchanged Slice-1 decide() strategy.
-export { fillRemainderWithBots } from './matchWithBots'
+// triggerMatching (instructor): THE matching action the dashboard button calls (game-ui
+// InstructorDashboard → httpsCallable('triggerMatching')). Now the CHAINED matcher — human
+// groups THEN bot-fill the remainder — so a class not divisible by 7 no longer strands the
+// remainder. fillRemainderWithBots stays exported standalone. runBotActionsTask (Cloud
+// Task): the scheduled bot-action pass; runBotActionsForTest is emulator-only. The bot bid
+// path reuses the human engine (applyBidderAction) and the unchanged Slice-1 decide().
+export { triggerMatching, fillRemainderWithBots } from './matchWithBots'
 export { runBotActionsTask, runBotActionsForTest } from './botRunner'
 
 // ── Non-game onRequest endpoints ────────────────────────────────────────────────
