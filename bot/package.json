@@ -1,0 +1,14 @@
+{
+  "name": "saa-bot",
+  "private": true,
+  "type": "module",
+  "description": "SAA robot mode — terminal Playwright driver + pure strategy (Slice 1)",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^2.0.0"
+  }
+}
